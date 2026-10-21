@@ -1,0 +1,14 @@
+{
+  "name": "Race Course Plotter",
+  "short_name": "Course Plotter",
+  "description": "Record an off-road course with GPS and get every corner rated and colour-coded by safe speed.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#14181c",
+  "theme_color": "#14181c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

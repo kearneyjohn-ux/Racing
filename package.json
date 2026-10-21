@@ -1,0 +1,13 @@
+{
+  "name": "race-course-plotter",
+  "version": "1.0.0",
+  "description": "Record an off-road course with GPS, rate every corner and colour-code it by safe speed.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "demo": "node tools/make-demo.js",
+    "start": "npx --yes http-server -c-1 -p 8080 ."
+  },
+  "license": "MIT"
+}

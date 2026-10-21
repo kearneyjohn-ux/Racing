@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14181c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Race Course Plotter</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo" aria-hidden="true"></span><span>Race Course Plotter</span></div>
+    <div class="course-name" id="courseName">No course loaded</div>
+  </header>
+
+  <main class="layout">
+    <div id="map" class="map" aria-label="Course map"></div>
+
+    <aside class="panel" id="panel">
+      <button class="grip" id="panelGrip" aria-label="Expand or collapse panel"></button>
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="course" aria-selected="true">Course</button>
+        <button role="tab" data-tab="corners" aria-selected="false">Corners</button>
+        <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+      </nav>
+
+      <section class="tab" id="tab-course">
+        <div class="card">
+          <h2>Record with this phone</h2>
+          <p class="muted">Mount the phone, press record and drive one lap. Stop when you cross the start again — extra laps are trimmed automatically.</p>
+          <div class="rec-row">
+            <button class="btn btn-rec" id="recBtn"><span class="dot"></span><span id="recLabel">Record course</span></button>
+          </div>
+          <dl class="stats" id="recStats" hidden>
+            <div><dt>Time</dt><dd id="recTime">0:00</dd></div>
+            <div><dt>Distance</dt><dd id="recDist">0 m</dd></div>
+            <div><dt>Fixes</dt><dd id="recFixes">0</dd></div>
+            <div><dt>GPS accuracy</dt><dd id="recAcc">—</dd></div>
+          </dl>
+        </div>
+
+        <div class="card">
+          <h2>Import a GPS file</h2>
+          <p class="muted">GPX, KML, GeoJSON, CSV or NMEA from a GPS logger, lap timer, watch or Strava/Garmin export.</p>
+          <div class="btn-row">
+            <label class="btn">Choose file<input type="file" id="fileInput" accept=".gpx,.kml,.geojson,.json,.csv,.txt,.nmea" hidden></label>
+            <button class="btn btn-ghost" id="demoBtn">Load demo course</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Saved courses</h2>
+          <ul class="course-list" id="courseList"></ul>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-corners" hidden>
+        <div class="empty" id="cornersEmpty">Record or import a course to see its corners.</div>
+        <div id="cornersBody" hidden>
+          <div class="summary" id="summary"></div>
+          <div class="btn-row">
+            <button class="btn btn-go" id="driveBtn">Drive with pace notes</button>
+            <button class="btn btn-ghost" id="replayBtn" title="Replay the recorded lap in drive mode">Replay lap</button>
+          </div>
+          <div class="legend" id="legend"></div>
+          <ol class="corner-list" id="cornerList"></ol>
+          <div class="card export">
+            <h2>Export</h2>
+            <div class="btn-row">
+              <button class="btn btn-ghost" data-export="kml" title="Colour-coded for Google Earth / My Maps">KML</button>
+              <button class="btn btn-ghost" data-export="geojson">GeoJSON</button>
+              <button class="btn btn-ghost" data-export="csv">Pace notes CSV</button>
+              <button class="btn btn-ghost" data-export="gpx">GPX track</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-settings" hidden>
+        <form class="settings" id="settingsForm">
+          <label>Surface
+            <select name="surface" id="surfaceSelect"></select>
+          </label>
+          <label>Grip you'll use <output id="confOut"></output>
+            <input type="range" name="confidence" min="0.5" max="1" step="0.05">
+            <small>Lower is safer. 80% leaves a margin for bumps, ruts and mistakes.</small>
+          </label>
+          <label>Vehicle top speed (km/h)
+            <input type="number" name="topSpeedKmh" min="30" max="300" step="5">
+            <small>Corners faster than this are marked Flat.</small>
+          </label>
+          <label>Units
+            <select name="units"><option value="kmh">km/h</option><option value="mph">mph</option></select>
+          </label>
+          <label>Course type
+            <select name="courseType">
+              <option value="auto">Detect automatically</option>
+              <option value="loop">Loop / circuit</option>
+              <option value="open">Point to point (stage)</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" name="reverse"> Drive the course in reverse</label>
+          <label>GPS smoothing
+            <select name="smoothing">
+              <option value="3">Light — 10 Hz logger</option>
+              <option value="5">Normal — phone</option>
+              <option value="8">Heavy — poor signal</option>
+            </select>
+          </label>
+          <label>Straight above radius (m)
+            <input type="number" name="straightRadius" min="50" max="500" step="10">
+            <small>Gentler bends than this are treated as straight.</small>
+          </label>
+          <label>Ignore bends under (degrees)
+            <input type="number" name="minAngle" min="5" max="60" step="1">
+          </label>
+          <label class="check"><input type="checkbox" name="voice"> Speak pace notes in drive mode</label>
+          <label>Call corners this many seconds ahead
+            <input type="number" name="leadSeconds" min="2" max="10" step="1">
+          </label>
+        </form>
+        <p class="muted small">Speeds are an estimate from corner radius and surface grip (v = √(μ·g·r)), not a guarantee. Walk or recce the course slowly first, and look out for crests, ruts and jumps — GPS can't see them.</p>
+      </section>
+    </aside>
+  </main>
+
+  <div class="drive" id="drive" hidden>
+    <div class="drive-card" id="dcCard">
+      <div class="dc-top"><span id="dcDist">—</span><span class="dc-num" id="dcNum"></span></div>
+      <div class="dc-main"><span class="dc-arrow" id="dcArrow"></span><span class="dc-grade" id="dcGrade">—</span></div>
+      <div class="dc-mods" id="dcMods"></div>
+      <div class="dc-target">Target <b id="dcTarget">—</b></div>
+    </div>
+    <div class="drive-next" id="dcNext"></div>
+    <div class="drive-bar">
+      <div class="dc-speed"><b id="dcSpeed">0</b> <small id="dcUnit">km/h</small></div>
+      <div class="dc-gps" id="dcGps">GPS —</div>
+      <button class="btn btn-ghost" id="dcVoice" aria-pressed="true">Voice on</button>
+      <button class="btn" id="dcExit">Exit</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

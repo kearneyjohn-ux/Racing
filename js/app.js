@@ -173,7 +173,37 @@ function hazardIcon(level) {
   });
 }
 const hzChip = (level) => `<span class="hz-chip" style="background:${HAZARD_LEVELS[level].color};color:${HAZARD_LEVELS[level].ink}">!</span>`;
-const startIcon = L.divIcon({ className: '', html: '<div class="start-marker"></div>', iconSize: [22, 22], iconAnchor: [11, 11] });
+// Chequered flag on a pole with a label; the pole's foot sits on the start/finish point.
+function flagIcon(label) {
+  const cell = 5;
+  let squares = '';
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 6; c++) {
+      squares += `<rect x="${6 + c * cell}" y="${3 + r * cell}" width="${cell}" height="${cell}" fill="${(r + c) % 2 ? '#fff' : '#000'}"/>`;
+    }
+  }
+  const svg = `<svg width="38" height="48" viewBox="0 0 38 48" aria-hidden="true">
+    <line x1="5" y1="2" x2="5" y2="47" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+    <line x1="5" y1="2" x2="5" y2="47" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+    ${squares}
+    <rect x="6" y="3" width="30" height="20" fill="none" stroke="#000" stroke-width="1.5"/>
+  </svg>`;
+  return L.divIcon({ className: '', html: `<div class="flag-marker">${svg}<span>${label}</span></div>`, iconSize: [150, 48], iconAnchor: [5, 47] });
+}
+
+// A chequered bar across the track at the start line, square to the direction of travel.
+function startLine(a, layer) {
+  const { _x: x, _y: y, _proj: proj } = a;
+  const k = Math.min(5, x.length - 1);
+  const dx = x[k] - x[0];
+  const dy = y[k] - y[0];
+  const len = Math.hypot(dx, dy) || 1;
+  const [nx, ny] = [-dy / len, dx / len];
+  const half = 12;
+  const ends = [proj.toLatLon(x[0] + nx * half, y[0] + ny * half), proj.toLatLon(x[0] - nx * half, y[0] - ny * half)];
+  L.polyline(ends, { color: '#fff', weight: 9, opacity: 1, interactive: false }).addTo(layer);
+  L.polyline(ends, { color: '#000', weight: 9, opacity: 1, dashArray: '4 4', lineCap: 'butt', interactive: false }).addTo(layer);
+}
 
 function renderMap(fit) {
   courseLayer.clearLayers();
@@ -202,8 +232,11 @@ function renderMap(fit) {
     }
   }
   if (gapRun) L.polyline(gapRun, { color: '#000', weight: 7, dashArray: '2 10', opacity: 0.9, interactive: false }).addTo(courseLayer);
-  L.marker(all[0], { icon: startIcon, title: 'Start', zIndexOffset: -100 }).addTo(courseLayer);
-  if (!a.closed) L.marker(all.at(-1), { icon: startIcon, title: 'Finish', zIndexOffset: -100 }).addTo(courseLayer);
+  startLine(a, courseLayer);
+  const sameSpot = a.closed || map.distance(all[0], all.at(-1)) < 40;
+  const startLabel = sameSpot ? 'START / FINISH' : 'START';
+  L.marker(all[0], { icon: flagIcon(startLabel), title: startLabel, zIndexOffset: 1000 }).addTo(courseLayer);
+  if (!sameSpot) L.marker(all.at(-1), { icon: flagIcon('FINISH'), title: 'Finish', zIndexOffset: 1000 }).addTo(courseLayer);
   for (const c of a.corners) {
     const m = L.marker([c.lat, c.lon], { icon: cornerIcon(c), title: `${c.number}: ${noteText(c)}`, riseOnHover: true });
     m.bindPopup(() => popupHtml(c), { maxWidth: 270, autoPanPadding: [20, 20] });
@@ -217,7 +250,8 @@ function renderMap(fit) {
     m.addTo(courseLayer);
     state.hazardMarkers.set(i, m);
   });
-  if (fit) map.fitBounds(L.latLngBounds(all), { padding: [30, 30] });
+  // Leave room at the bottom for the Record button so the start flag isn't hidden under it.
+  if (fit) map.fitBounds(L.latLngBounds(all), { paddingTopLeft: [30, 40], paddingBottomRight: [30, 110] });
 }
 
 function hazardPopupHtml(i) {
@@ -761,6 +795,7 @@ function onRecFix(p) {
       rec.speed = Number.isFinite(p.speed) ? p.speed : dt > 0 ? d / dt : rec.speed;
     } else {
       rec.first = p;
+      L.marker([p.lat, p.lon], { icon: flagIcon('START'), interactive: false, zIndexOffset: 1000 }).addTo(liveLayer);
     }
     rec.lastGood = p;
     rec.line.addLatLng([p.lat, p.lon]);

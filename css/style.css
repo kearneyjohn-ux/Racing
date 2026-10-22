@@ -210,6 +210,18 @@ button, input, select { font: inherit; color: inherit; }
 .section-title { font-size: 14px; color: var(--muted); margin: 4px 0 6px; font-weight: 600; }
 .hazard-list li { grid-template-columns: 26px 44px 1fr; }
 
+/* Map: shown when you've dragged away from your position while recording or driving */
+.recentre-btn {
+  padding: 8px 12px;
+  border: 2px solid rgba(0, 0, 0, .3);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.recentre-btn[hidden] { display: none; }
+
 /* Map markers */
 .hazard-marker { filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000) drop-shadow(0 1px 3px rgba(0, 0, 0, .6)); }
 .hazard-marker div {

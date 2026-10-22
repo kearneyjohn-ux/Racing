@@ -42,6 +42,9 @@ It runs in the phone's browser, so there's nothing to install. You can add it to
 - **Course type**: auto-detect, loop, or point-to-point stage. **Reverse** analyses the course the other way round.
 - **GPS smoothing**: Light for a 10 Hz logger, Normal for a phone, Heavy for poor signal under trees.
 - **Straight above radius / Ignore bends under** set how gentle a bend can be before it's ignored.
+- **Call corners**: at a set distance before the corner (default 100 m, also used for hazards) or a set time before it. **Say the distance** adds it to each call, e.g. "100 metres, left 3".
+
+While recording or driving the map follows you. Zoom with pinch or the +/− buttons at any time and the zoom is remembered. Drag the map to look around, and tap **Re-centre** to follow again.
 
 ## How the rating works
 

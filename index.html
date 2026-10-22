@@ -133,9 +133,20 @@
           <label class="check"><input type="checkbox" name="listen"> Listen for hazard calls while recording (say green, orange or red)</label>
           <label class="check"><input type="checkbox" name="autoStop"> Stop recording automatically at the end of the lap</label>
           <label class="check"><input type="checkbox" name="voice"> Speak pace notes in drive mode</label>
-          <label>Call corners this many seconds ahead
+          <label>Call corners
+            <select name="callMode">
+              <option value="distance">At a set distance before the corner</option>
+              <option value="time">A set time before the corner</option>
+            </select>
+          </label>
+          <label data-call="distance">Distance before the corner (metres)
+            <input type="number" name="callDistance" min="30" max="500" step="10">
+            <small>Hazards are called at the same distance.</small>
+          </label>
+          <label data-call="time">Seconds before the corner
             <input type="number" name="leadSeconds" min="2" max="10" step="1">
           </label>
+          <label class="check"><input type="checkbox" name="sayDistance"> Say the distance, e.g. "100 metres, left 3"</label>
         </form>
         <p class="muted small">Speeds are an estimate from corner radius and surface grip (v = √(μ·g·r)), not a guarantee. Walk or recce the course slowly first, and look out for crests, ruts and jumps — GPS can't see them.</p>
       </section>

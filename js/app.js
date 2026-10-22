@@ -81,6 +81,10 @@ const APP_DEFAULTS = {
   minAngle: DEFAULTS.minAngle,
   voice: true,
   leadSeconds: 5,
+  callMode: 'distance',
+  callDistance: 100,
+  sayDistance: true,
+  driveZoom: 17,
   autoStop: false,
   listen: true,
   lastCourse: null,
@@ -601,6 +605,7 @@ function initSettings() {
     else el.value = state.settings[el.name];
   }
   $('confOut').textContent = `${Math.round(state.settings.confidence * 100)}%`;
+  showCallRows();
   form.addEventListener('input', (e) => {
     const el = e.target;
     if (!el.name) return;
@@ -614,11 +619,74 @@ function initSettings() {
     $('confOut').textContent = `${Math.round(state.settings.confidence * 100)}%`;
     if (el.name === 'units') {
       renderCorners();
-    } else if (!['voice', 'leadSeconds', 'autoStop', 'listen'].includes(el.name)) {
+    } else if (el.name === 'callMode') {
+      showCallRows();
+    } else if (!['voice', 'leadSeconds', 'callDistance', 'sayDistance', 'autoStop', 'listen'].includes(el.name)) {
       analyse();
     }
   });
 }
+
+// Only show the setting for the chosen way of timing calls.
+function showCallRows() {
+  document.querySelectorAll('[data-call]').forEach((el) => (el.hidden = el.dataset.call !== state.settings.callMode));
+}
+
+// ---------------------------------------------------------------------------
+// Map follow while recording or driving. The map tracks your position, but pauses while you
+// pinch or zoom so the gesture isn't fought, and stops if you drag it away until Re-centre.
+
+const follow = { on: true, holdUntil: 0, touching: false };
+
+function followTo(latlng, animate = true) {
+  if (!follow.on || follow.touching || map._animatingZoom || Date.now() < follow.holdUntil) return;
+  map.panTo(latlng, animate ? { animate: true, duration: 0.4 } : { animate: false });
+}
+
+function resetFollow() {
+  follow.on = true;
+  follow.holdUntil = 0;
+  recentreControl.getContainer().hidden = true;
+}
+
+const followActive = () => !!(state.rec || state.drive);
+const mapEl = map.getContainer();
+mapEl.addEventListener('touchstart', () => (follow.touching = true), { passive: true });
+mapEl.addEventListener('touchend', () => {
+  follow.touching = false;
+  follow.holdUntil = Date.now() + 800;
+});
+map.on('zoomstart', () => (follow.holdUntil = Date.now() + 800));
+map.on('zoomend', () => {
+  follow.holdUntil = Date.now() + 400;
+  if (followActive()) {
+    state.settings.driveZoom = map.getZoom();
+    saveSettings();
+  }
+});
+map.on('dragstart', () => {
+  if (!followActive()) return;
+  follow.on = false;
+  recentreControl.getContainer().hidden = false;
+});
+
+const RecentreControl = L.Control.extend({
+  options: { position: 'topright' },
+  onAdd() {
+    const btn = L.DomUtil.create('button', 'recentre-btn');
+    btn.type = 'button';
+    btn.textContent = 'Re-centre';
+    btn.hidden = true;
+    L.DomEvent.disableClickPropagation(btn);
+    L.DomEvent.on(btn, 'click', () => {
+      resetFollow();
+      const at = state.drive?.last ?? state.rec?.points.at(-1);
+      if (at) map.panTo([at.lat, at.lon]);
+    });
+    return btn;
+  },
+});
+const recentreControl = new RecentreControl().addTo(map);
 
 // ---------------------------------------------------------------------------
 // Screen wake lock (keeps GPS running: most phones throttle location when the screen sleeps)
@@ -755,6 +823,7 @@ function startRecording() {
     dot: null,
   };
   state.rec = rec;
+  resetFollow();
   rec.stop = watchGPS(
     onRecFix,
     (err) => {
@@ -805,10 +874,10 @@ function onRecFix(p) {
 
   if (!rec.dot) {
     rec.dot = L.circleMarker([p.lat, p.lon], { radius: 8, color: '#fff', weight: 3, fillColor: '#ff3b30', fillOpacity: 1 }).addTo(liveLayer);
-    map.setView([p.lat, p.lon], 17);
+    map.setView([p.lat, p.lon], state.settings.driveZoom || 17);
   } else {
     rec.dot.setLatLng([p.lat, p.lon]);
-    map.panTo([p.lat, p.lon], { animate: true, duration: 0.4 });
+    followTo([p.lat, p.lon]);
   }
   if (rec.points.length % 5 === 0) saveRecordingDraft(rec);
   updateRecStats();
@@ -1037,6 +1106,7 @@ function stopRecording(discard = false) {
   clearInterval(rec.timer);
   liveLayer.clearLayers();
   state.rec = null;
+  resetFollow();
   stopListening();
   keepAwake(false);
   store.del(REC_KEY);
@@ -1194,7 +1264,8 @@ function startDrive(replay = false) {
   $('dcUnit').textContent = speedUnit();
   setVoiceButton();
   map.invalidateSize();
-  map.setView([a.samples[0].lat, a.samples[0].lon], 17);
+  resetFollow();
+  map.setView([a.samples[0].lat, a.samples[0].lon], state.settings.driveZoom || 17);
   showCard(null);
   if (d.voice) speak('Pace notes ready');
   $('dcReplaySpeed').hidden = !replay;
@@ -1214,6 +1285,7 @@ function stopDrive() {
   if (!d) return;
   d.stop?.();
   state.drive = null;
+  resetFollow();
   liveLayer.clearLayers();
   keepAwake(false);
   if ('speechSynthesis' in window) speechSynthesis.cancel();
@@ -1253,7 +1325,7 @@ function onDriveFix(fix) {
 
   d.marker.setLatLng([fix.lat, fix.lon]);
   const fast = d.replay && d.replaySpeed >= 4;
-  map.panTo([fix.lat, fix.lon], fast ? { animate: false } : { animate: true, duration: 0.4 });
+  followTo([fix.lat, fix.lon], !fast);
   $('dcSpeed').textContent = Math.round(toUnit(v * 3.6));
   $('dcGps').textContent = d.replay ? '' : `GPS ±${Math.round(fix.acc)} m`;
   $('dcGps').className = `dc-gps ${accClass(fix.acc)}`;
@@ -1265,10 +1337,17 @@ function onDriveFix(fix) {
   }
   const ahead = cornersAhead(a, loc.index, 2);
   const [next, after] = ahead;
-  // When replaying faster, call corners proportionally earlier so the voice still finishes
-  // before the corner (capped so a fast replay doesn't call half the lap at once).
-  const timeScale = d.replay ? d.replaySpeed : 1;
-  const lead = Math.min(Math.max(60, v * Number(state.settings.leadSeconds || 5) * timeScale), 400);
+  const s = state.settings;
+  let lead;
+  if (s.callMode === 'time') {
+    // When replaying faster, call corners proportionally earlier so the voice still finishes
+    // before the corner (capped so a fast replay doesn't call half the lap at once).
+    const timeScale = d.replay ? d.replaySpeed : 1;
+    lead = Math.min(Math.max(60, v * Number(s.leadSeconds || 5) * timeScale), 400);
+  } else {
+    lead = Number(s.callDistance) || 100;
+  }
+  const say = (dist) => (s.sayDistance && dist >= 10 ? `${Math.round(dist / 10) * 10} metres` : '');
   showCard(next, null, after, v * 3.6, lead);
   const hazards = hazardsAhead(a, state.hazards, loc.index, lead);
   showHazard(hazards[0]);
@@ -1281,15 +1360,15 @@ function onDriveFix(fix) {
   };
   const key = (item) => `c${item.corner.number}:${lapOf(item.corner.startIdx, item.distance === 0)}`;
   const calls = [];
-  for (const { hazard } of hazards) {
+  for (const { hazard, distance } of hazards) {
     const k = `h${hazard.id}:${lapOf(hazard.index)}`;
     if (d.announced.has(k)) continue;
     d.announced.add(k);
-    calls.push(`${hazard.level} hazard`);
+    calls.push([`${hazard.level} hazard`, say(distance)].filter(Boolean).join(', '));
   }
   if (next && next.distance <= lead && !d.announced.has(key(next))) {
     d.announced.add(key(next));
-    let text = spokenNote(next.corner);
+    let text = [say(next.distance), spokenNote(next.corner)].filter(Boolean).join(', ');
     if (next.corner.into && after) {
       d.announced.add(key(after));
       text += `, into ${spokenNote(after.corner)}`;
@@ -1393,4 +1472,4 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 }
 
 // Exposed for debugging from the console.
-window.rcp = { state, analyse };
+window.rcp = { state, analyse, map };

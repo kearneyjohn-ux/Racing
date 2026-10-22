@@ -1,7 +1,7 @@
 // Offline support: the app shell is cached so it opens at a track with no signal, and map
 // tiles you have already viewed (e.g. at home on Wi-Fi) are kept for later.
 
-const VERSION = 'rcp-v5';
+const VERSION = 'rcp-v6';
 const SHELL = [
   './',
   'index.html',

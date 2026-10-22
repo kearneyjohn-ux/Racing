@@ -1134,13 +1134,18 @@ function speak(text) {
   speechSynthesis.speak(u);
 }
 
-function replaySource(onFix, speedUp = 2) {
-  let pts = unpack(state.course.points).filter((p) => !(p.acc > DEFAULTS.maxAccuracy));
+const REPLAY_SPEEDS = [1, 2, 4, 8, 16];
+
+// Plays the recorded lap back through drive mode. `getSpeed()` is read before every fix so the
+// speed button takes effect immediately; `kick()` cuts short the current wait after a change.
+function replaySource(onFix, getSpeed) {
+  let pts = unpack(state.course.points).filter((p) => !(p.acc > DEFAULTS.maxAccuracy) && !p.filled);
   if (state.settings.reverse) pts = pts.reverse();
   const timed = pts.every((p) => Number.isFinite(p.t));
   let i = 0;
   let timer;
   const step = () => {
+    timer = null;
     if (i >= pts.length) {
       toast('Replay finished');
       return;
@@ -1151,10 +1156,17 @@ function replaySource(onFix, speedUp = 2) {
     i++;
     if (!next) return;
     const dt = timed ? Math.abs(next.t - p.t) : (haversine(p, next) / 15) * 1000;
-    timer = setTimeout(step, Math.min(3000, Math.max(50, dt / speedUp)));
+    timer = setTimeout(step, Math.min(3000, Math.max(40, dt / getSpeed())));
   };
   step();
-  return () => clearTimeout(timer);
+  return {
+    stop: () => clearTimeout(timer),
+    kick: () => {
+      if (!timer) return;
+      clearTimeout(timer);
+      timer = setTimeout(step, 40);
+    },
+  };
 }
 
 function startDrive(replay = false) {
@@ -1167,6 +1179,7 @@ function startDrive(replay = false) {
   stopWarmup();
   const d = {
     replay,
+    replaySpeed: 2,
     hint: -1,
     prevIdx: null,
     lap: 0,
@@ -1184,7 +1197,15 @@ function startDrive(replay = false) {
   map.setView([a.samples[0].lat, a.samples[0].lon], 17);
   showCard(null);
   if (d.voice) speak('Pace notes ready');
-  d.stop = replay ? replaySource(onDriveFix) : watchGPS(onDriveFix, null, true);
+  $('dcReplaySpeed').hidden = !replay;
+  setReplaySpeedButton();
+  if (replay) {
+    const src = replaySource(onDriveFix, () => d.replaySpeed);
+    d.stop = src.stop;
+    d.kick = src.kick;
+  } else {
+    d.stop = watchGPS(onDriveFix, null, true);
+  }
   keepAwake(true);
 }
 
@@ -1231,9 +1252,10 @@ function onDriveFix(fix) {
   d.prevIdx = loc.index;
 
   d.marker.setLatLng([fix.lat, fix.lon]);
-  map.panTo([fix.lat, fix.lon], { animate: true, duration: 0.4 });
+  const fast = d.replay && d.replaySpeed >= 4;
+  map.panTo([fix.lat, fix.lon], fast ? { animate: false } : { animate: true, duration: 0.4 });
   $('dcSpeed').textContent = Math.round(toUnit(v * 3.6));
-  $('dcGps').textContent = `${d.replay ? 'Replay ×2 · ' : ''}GPS ±${Math.round(fix.acc)} m`;
+  $('dcGps').textContent = d.replay ? '' : `GPS ±${Math.round(fix.acc)} m`;
   $('dcGps').className = `dc-gps ${accClass(fix.acc)}`;
 
   if (loc.offset > 40) {
@@ -1243,7 +1265,10 @@ function onDriveFix(fix) {
   }
   const ahead = cornersAhead(a, loc.index, 2);
   const [next, after] = ahead;
-  const lead = Math.max(60, v * Number(state.settings.leadSeconds || 5));
+  // When replaying faster, call corners proportionally earlier so the voice still finishes
+  // before the corner (capped so a fast replay doesn't call half the lap at once).
+  const timeScale = d.replay ? d.replaySpeed : 1;
+  const lead = Math.min(Math.max(60, v * Number(state.settings.leadSeconds || 5) * timeScale), 400);
   showCard(next, null, after, v * 3.6, lead);
   const hazards = hazardsAhead(a, state.hazards, loc.index, lead);
   showHazard(hazards[0]);
@@ -1327,6 +1352,21 @@ function showCard(item, message, after, kmh = 0, lead = 0) {
 $('driveBtn').addEventListener('click', () => startDrive(false));
 $('replayBtn').addEventListener('click', () => startDrive(true));
 $('dcExit').addEventListener('click', stopDrive);
+
+function setReplaySpeedButton() {
+  const d = state.drive;
+  if (!d?.replay) return;
+  $('dcReplaySpeed').textContent = `Speed ×${d.replaySpeed}`;
+  $('dcReplaySpeed').setAttribute('aria-label', `Replay speed ${d.replaySpeed} times. Tap to change.`);
+}
+
+$('dcReplaySpeed').addEventListener('click', () => {
+  const d = state.drive;
+  if (!d?.replay) return;
+  d.replaySpeed = REPLAY_SPEEDS[(REPLAY_SPEEDS.indexOf(d.replaySpeed) + 1) % REPLAY_SPEEDS.length];
+  setReplaySpeedButton();
+  d.kick?.();
+});
 $('dcVoice').addEventListener('click', () => {
   if (!state.drive) return;
   state.drive.voice = !state.drive.voice;

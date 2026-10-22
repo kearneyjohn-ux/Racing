@@ -2,7 +2,7 @@ name: Test and deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, claude/gps-race-course-plotting-0mjyiv]
   pull_request:
   workflow_dispatch:
 
@@ -26,7 +26,8 @@ jobs:
       - run: npm test
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # GitHub Pages only accepts deploys from the repository's default branch.
+    if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
     needs: test
     runs-on: ubuntu-latest
     environment:

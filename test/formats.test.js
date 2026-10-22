@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTrackFile, toGPX, toKML, toGeoJSON, toPaceNotesCSV } from '../js/formats.js';
+import { parseTrackFile, parseGPXHazards, toGPX, toKML, toGeoJSON, toPaceNotesCSV } from '../js/formats.js';
 import { analyzeCourse, colourRuns, placeHazards } from '../js/analysis.js';
 import { buildPath, toLatLon } from '../tools/track-gen.js';
 
@@ -68,4 +68,23 @@ test('exports round-trip and carry corner colours', () => {
   assert.equal(csv.length, 3);
   assert.match(csv[2], /^hazard,Red hazard,red,/);
   assert.match(csv[1], /^1,"Left \d/);
+});
+
+test('GPX export carries corners and hazards, and hazards re-import', () => {
+  const pts = toLatLon(buildPath([{ straight: 200 }, { radius: 30, angle: 90, dir: 'L' }, { straight: 200 }])).map((p, i) => ({ ...p, t: Date.UTC(2026, 9, 1) + i * 100 }));
+  const a = analyzeCourse(pts);
+  const hazards = [{ lat: a.samples[50].lat, lon: a.samples[50].lon, level: 'orange' }];
+  const gpx = toGPX('Lap <1>', pts, { corners: a.corners, hazards });
+  assert.match(gpx, /<wpt [^>]+><name>1\. Left \d[^<]*<\/name><desc>\d+ m radius/);
+  assert.match(gpx, /<type>hazard-orange<\/type>/);
+  assert.ok(gpx.indexOf('<wpt') < gpx.indexOf('<trk>'), 'waypoints come before the track (GPX 1.1 order)');
+  assert.match(gpx, /<name>Lap &lt;1&gt;<\/name>/);
+  // Re-import: the track is unchanged by the waypoints, and the hazard comes back.
+  const back = parseTrackFile(gpx, 'lap.gpx');
+  assert.equal(back.length, pts.length);
+  assert.ok(Number.isFinite(back[0].t));
+  const hz = parseGPXHazards(gpx);
+  assert.equal(hz.length, 1);
+  assert.equal(hz[0].level, 'orange');
+  assert.ok(Math.abs(hz[0].lat - hazards[0].lat) < 1e-6);
 });

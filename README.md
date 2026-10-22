@@ -32,7 +32,7 @@ It runs in the phone's browser, so there's nothing to install. You can add it to
 
    Notes also say **tightens**, **opens**, **long** (110° or more) and **into** (the next corner follows within 30 m). Tap a corner to see its radius, angle and the speed you actually did. You can override its grade or add a note like "don't cut" or "jump".
 4. **Drive with pace notes.** A big colour card shows the next corner, its distance and target speed, plus the corner after it. Notes are read aloud a few seconds before each corner ("left 3 tightens, into right 4"). The target turns red if you're coming in too fast. **Replay lap** plays your recorded lap through drive mode so you can try it from the sofa.
-5. **Export**: KML (colour-coded, opens in Google Earth / Google My Maps), GeoJSON (with `stroke` colours for geojson.io and QGIS), pace notes CSV, or the raw GPX.
+5. **Export**: **GPX** (the track plus every corner and hazard as named waypoints; opens in Garmin, OsmAnd, Gaia GPS, Google Earth, and re-imports here with its hazards), KML (colour-coded for Google Earth / My Maps), GeoJSON, or pace notes CSV. Every saved course also has a **GPX** button in the course list. On phones that support it, exports open the share sheet (Save to Files, AirDrop, WhatsApp).
 
 ## Settings
 

@@ -18,7 +18,7 @@ import {
   spokenNote,
   SURFACES,
 } from './analysis.js';
-import { parseTrackFile, toGeoJSON, toGPX, toKML, toPaceNotesCSV } from './formats.js';
+import { parseGPXHazards, parseTrackFile, toGeoJSON, toGPX, toKML, toPaceNotesCSV } from './formats.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -126,6 +126,21 @@ function toast(msg, ms = 3500) {
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.hidden = true), ms);
+}
+
+// On phones that support it, open the share sheet (Save to Files, AirDrop, WhatsApp…);
+// otherwise download the file.
+async function shareOrDownload(name, text, type) {
+  try {
+    const file = new File([text], name, { type });
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: name });
+      return;
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError') return; // share sheet closed
+  }
+  download(name, text, type);
 }
 
 function download(name, text, type) {
@@ -343,22 +358,26 @@ function saveOverride(c, grade, note) {
   toast(`Corner ${c.number} updated`);
 }
 
-function analyse(fit = false) {
+function analysisOptions(course) {
   const s = state.settings;
+  return {
+    surface: s.surface,
+    confidence: Number(s.confidence),
+    topSpeedKmh: Number(s.topSpeedKmh),
+    smoothing: Number(s.smoothing),
+    straightRadius: Number(s.straightRadius),
+    minAngle: Number(s.minAngle),
+    courseType: s.courseType,
+    reverse: s.reverse,
+    overrides: course.overrides?.[overrideKey()] ?? [],
+  };
+}
+
+function analyse(fit = false) {
   state.analysis = null;
   if (state.course) {
     try {
-      state.analysis = analyzeCourse(unpack(state.course.points), {
-        surface: s.surface,
-        confidence: Number(s.confidence),
-        topSpeedKmh: Number(s.topSpeedKmh),
-        smoothing: Number(s.smoothing),
-        straightRadius: Number(s.straightRadius),
-        minAngle: Number(s.minAngle),
-        courseType: s.courseType,
-        reverse: s.reverse,
-        overrides: state.course.overrides?.[overrideKey()] ?? [],
-      });
+      state.analysis = analyzeCourse(unpack(state.course.points), analysisOptions(state.course));
     } catch (e) {
       toast(e.message);
     }
@@ -368,6 +387,18 @@ function analyse(fit = false) {
   renderCorners();
   renderCourseList();
   $('courseName').textContent = state.course ? state.course.name : 'No course loaded';
+}
+
+// GPX of a saved course: its recorded track plus corners and hazards as waypoints.
+function exportGPX(course) {
+  let corners = [];
+  try {
+    corners = (course === state.course && state.analysis ? state.analysis : analyzeCourse(unpack(course.points), analysisOptions(course))).corners;
+  } catch {
+    /* too short to analyse: export the track alone */
+  }
+  const gpx = toGPX(course.name, unpack(course.points), { corners, hazards: course.hazards ?? [], fmtSpeed });
+  shareOrDownload(`${course.name.replace(/[^\w-]+/g, '_')}.gpx`, gpx, 'application/gpx+xml');
 }
 
 function addCourse(name, points, hazards = []) {
@@ -449,6 +480,7 @@ function renderCourseList() {
     .map(
       (c) => `<li class="${state.course?.id === c.id ? 'active' : ''}" data-id="${c.id}">
         <span class="name" data-act="open"><b>${esc(c.name)}</b><small>${new Date(c.created).toLocaleDateString()} · ${c.points.length} fixes${c.hazards?.length ? ` · ${c.hazards.length} hazards` : ''}</small></span>
+        <button class="icon-btn gpx-btn" data-act="gpx" aria-label="Export GPX" title="Export GPX">GPX</button>
         <button class="icon-btn" data-act="rename" aria-label="Rename" title="Rename">✎</button>
         <button class="icon-btn" data-act="delete" aria-label="Delete" title="Delete">✕</button>
       </li>`,
@@ -462,6 +494,7 @@ $('courseList').addEventListener('click', (e) => {
   if (!act || !li) return;
   const course = state.courses.find((c) => c.id === li.dataset.id);
   if (act === 'open') selectCourse(course);
+  if (act === 'gpx') exportGPX(course);
   if (act === 'rename') {
     const name = prompt('Course name', course.name);
     if (name?.trim()) {
@@ -566,7 +599,7 @@ document.querySelectorAll('[data-export]').forEach((btn) =>
     if (kind === 'kml') download(`${base}.kml`, toKML(state.course.name, a, state.runs, fmtSpeed, hz), 'application/vnd.google-earth.kml+xml');
     if (kind === 'geojson') download(`${base}.geojson`, toGeoJSON(state.course.name, a, state.runs, hz), 'application/geo+json');
     if (kind === 'csv') download(`${base}-pace-notes.csv`, toPaceNotesCSV(a, (k) => Math.round(toUnit(k)), hz), 'text/csv');
-    if (kind === 'gpx') download(`${base}.gpx`, toGPX(state.course.name, unpack(state.course.points)), 'application/gpx+xml');
+    if (kind === 'gpx') exportGPX(state.course);
   }),
 );
 
@@ -1177,8 +1210,12 @@ $('fileInput').addEventListener('change', async (e) => {
   e.target.value = '';
   if (!file) return;
   try {
-    const points = parseTrackFile(await file.text(), file.name);
-    addCourse(file.name.replace(/\.[^.]+$/, ''), points);
+    const text = await file.text();
+    const points = parseTrackFile(text, file.name);
+    // GPX files exported from this app also bring their hazards back.
+    const hazards = /<gpx[\s>]/i.test(text.slice(0, 500)) ? parseGPXHazards(text) : [];
+    addCourse(file.name.replace(/\.[^.]+$/, ''), points, hazards);
+    if (hazards.length) toast(`Imported with ${hazards.length} hazard${hazards.length > 1 ? 's' : ''}.`);
   } catch (err) {
     toast(`Couldn't read ${file.name}: ${err.message}`);
   }

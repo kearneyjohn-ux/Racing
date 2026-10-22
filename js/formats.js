@@ -144,7 +144,17 @@ export function parseCSV(text) {
 const esc = (s) => String(s).replace(/[<>&"]/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[ch]);
 const f7 = (v) => Number(v).toFixed(7);
 
-export function toGPX(name, points) {
+// GPX 1.1 with the recorded track, plus corners and hazards as waypoints so they show up in
+// other GPS apps. Hazard waypoints carry <type>hazard-LEVEL</type> so they can be re-imported.
+export function toGPX(name, points, { corners = [], hazards = [], fmtSpeed = (k) => `${Math.round(k)} km/h` } = {}) {
+  const wpt = (lat, lon, title, desc, sym, type) =>
+    `  <wpt lat="${f7(lat)}" lon="${f7(lon)}"><name>${esc(title)}</name>${desc ? `<desc>${esc(desc)}</desc>` : ''}<sym>${sym}</sym><type>${type}</type></wpt>`;
+  const waypoints = [
+    ...corners.map((c) =>
+      wpt(c.lat, c.lon, `${c.number}. ${noteText(c)}`, `${Math.round(c.radius)} m radius, ${Math.round(c.angle)}°, target ${fmtSpeed(c.speedKmh)}`, 'Flag, Blue', `corner-${c.grade}`),
+    ),
+    ...hazards.map((h) => wpt(h.lat, h.lon, `${HAZARD_LEVELS[h.level].label} hazard`, '', 'Danger Area', `hazard-${h.level}`)),
+  ];
   const pts = points
     .map((p) => {
       const ele = Number.isFinite(p.ele) ? `<ele>${p.ele.toFixed(1)}</ele>` : '';
@@ -154,13 +164,24 @@ export function toGPX(name, points) {
     .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Race Course Plotter" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk><name>${esc(name)}</name>
+  <metadata><name>${esc(name)}</name><time>${new Date().toISOString()}</time></metadata>
+${waypoints.join('\n')}${waypoints.length ? '\n' : ''}  <trk><name>${esc(name)}</name>
     <trkseg>
 ${pts}
     </trkseg>
   </trk>
 </gpx>
 `;
+}
+
+// Hazards saved by toGPX (waypoints typed hazard-green / hazard-orange / hazard-red).
+export function parseGPXHazards(text) {
+  const out = [];
+  for (const m of text.matchAll(/<wpt\b([^>]*)>([\s\S]*?)<\/wpt>/gi)) {
+    const level = (child(m[2], 'type') ?? '').match(/^hazard-(green|orange|red)$/)?.[1];
+    if (level) out.push({ lat: num(attr(m[1], 'lat')), lon: num(attr(m[1], 'lon')), level });
+  }
+  return out.filter((h) => Number.isFinite(h.lat) && Number.isFinite(h.lon));
 }
 
 export function toGeoJSON(name, analysis, runs, hazards = []) {

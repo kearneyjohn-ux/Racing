@@ -1,6 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeCourse, cornerSpeedKmh, gradeFor, locate, cornersAhead, colourRuns, noteText } from '../js/analysis.js';
+import {
+  analyzeCourse,
+  cornerSpeedKmh,
+  gradeFor,
+  locate,
+  cornersAhead,
+  colourRuns,
+  noteText,
+  spokenNote,
+  placeHazards,
+  hazardsAhead,
+  positionAtTime,
+  hazardLevelFromSpeech,
+} from '../js/analysis.js';
 import { buildPath, toLatLon, simulateGPS, speedProfile } from '../tools/track-gen.js';
 
 const track = (parts, opts) => toLatLon(buildPath(parts, opts));
@@ -24,12 +37,14 @@ test('single 90° left: direction, radius, angle', () => {
   near(c.apexS, 200 + (30 * Math.PI) / 4, 8, 'apex position');
 });
 
-test('tight 180° right is a hairpin', () => {
+test('tight 180° right is a grade 1 hairpin', () => {
   const a = analyzeCourse(track([{ straight: 150 }, { radius: 10, angle: 180, dir: 'R' }, { straight: 150 }]));
   assert.equal(a.corners.length, 1);
   assert.equal(a.corners[0].dir, 'R');
-  assert.equal(a.corners[0].grade, 'H');
-  assert.match(noteText(a.corners[0]), /^Right Hairpin/);
+  assert.equal(a.corners[0].grade, '1');
+  assert.equal(a.corners[0].hairpin, true);
+  assert.match(noteText(a.corners[0]), /^Right 1 hairpin/);
+  assert.match(spokenNote(a.corners[0]), /^right 1 hairpin/);
 });
 
 test('S-bend gives two corners in opposite directions', () => {
@@ -116,8 +131,11 @@ test('speed model and grading', () => {
   near(cornerSpeedKmh(50, { surface: 'gravel', confidence: 0.8 }), 52.9, 0.2, 'speed');
   assert.equal(gradeFor({ radius: 50, angle: 60 }, { surface: 'gravel' }).grade, '3');
   assert.equal(gradeFor({ radius: 8, angle: 90 }, { surface: 'gravel' }).grade, '1');
-  assert.equal(gradeFor({ radius: 12, angle: 170 }, { surface: 'gravel' }).grade, 'H');
-  assert.equal(gradeFor({ radius: 2000, angle: 20 }, { surface: 'tarmac', topSpeedKmh: 120 }).grade, 'F');
+  const hp = gradeFor({ radius: 12, angle: 170 }, { surface: 'gravel' });
+  assert.deepEqual([hp.grade, hp.hairpin], ['1', true]);
+  // Only grades 1-5 exist: anything very fast is a 5, capped at the vehicle's top speed.
+  const fast = gradeFor({ radius: 2000, angle: 20 }, { surface: 'tarmac', topSpeedKmh: 120 });
+  assert.deepEqual([fast.grade, fast.speedKmh], ['5', 120]);
   // Less grip means a slower (lower) grade for the same corner.
   const dry = gradeFor({ radius: 80, angle: 60 }, { surface: 'hardpack' }).grade;
   const mud = gradeFor({ radius: 80, angle: 60 }, { surface: 'mud' }).grade;
@@ -159,4 +177,44 @@ test('colour runs cover the whole course', () => {
   assert.equal(runs.filter((r) => r.corner).length, 4);
   const pts = runs.reduce((s, r) => s + r.latlngs.length - 1, 0);
   assert.equal(pts, a.samples.length, 'every segment drawn once, including the closing one');
+});
+
+test('hazards snap to the course and are found ahead, including across the line', () => {
+  const a = analyzeCourse(track(rectangle));
+  const at = (i) => ({ lat: a.samples[i].lat, lon: a.samples[i].lon });
+  const n = a.samples.length;
+  const far = { lat: a.samples[0].lat + 0.01, lon: a.samples[0].lon };
+  const placed = placeHazards(a, [
+    { ...at(400), level: 'red' },
+    { ...at(50), level: 'green' },
+    { ...far, level: 'orange' }, // 1 km away: dropped
+    { ...at(60), level: 'purple' }, // unknown level: dropped
+  ]);
+  assert.deepEqual(placed.map((h) => h.level), ['green', 'red']);
+  const ahead = hazardsAhead(a, placed, 350, 100);
+  assert.equal(ahead.length, 1);
+  assert.equal(ahead[0].hazard.level, 'red');
+  assert.ok(Math.abs(ahead[0].distance - 50 * a.ds) < 2);
+  const wrap = hazardsAhead(a, placed, n - 20, 100);
+  assert.deepEqual(wrap.map((x) => x.hazard.level), ['green']);
+});
+
+test('positionAtTime interpolates between fixes', () => {
+  const pts = [
+    { lat: 52, lon: -7, t: 1000 },
+    { lat: 52.001, lon: -7, t: 2000 },
+  ];
+  assert.deepEqual(positionAtTime(pts, 1500), { lat: 52.0005, lon: -7 });
+  assert.deepEqual(positionAtTime(pts, 500), { lat: 52, lon: -7 });
+  assert.deepEqual(positionAtTime(pts, 9000), { lat: 52.001, lon: -7 });
+  assert.equal(positionAtTime([{ lat: 1, lon: 1, t: NaN }], 5), null);
+});
+
+test('hazard colours are picked out of speech', () => {
+  assert.equal(hazardLevelFromSpeech('Red'), 'red');
+  assert.equal(hazardLevelFromSpeech('read'), 'red');
+  assert.equal(hazardLevelFromSpeech('uh amber'), 'orange');
+  assert.equal(hazardLevelFromSpeech('green then red'), 'green');
+  assert.equal(hazardLevelFromSpeech('Greenland'), null);
+  assert.equal(hazardLevelFromSpeech('left three'), null);
 });

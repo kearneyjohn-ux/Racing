@@ -1,6 +1,6 @@
 // Import and export of GPS tracks. Regex-based parsing keeps this DOM-free and testable in node.
 
-import { GRADE, noteText } from './analysis.js';
+import { GRADE, HAZARD_LEVELS, noteText } from './analysis.js';
 
 const num = (v) => (v === undefined || v === null || v === '' ? NaN : Number(v));
 const attr = (tag, name) => {
@@ -163,7 +163,7 @@ ${pts}
 `;
 }
 
-export function toGeoJSON(name, analysis, runs) {
+export function toGeoJSON(name, analysis, runs, hazards = []) {
   const features = [
     {
       type: 'Feature',
@@ -191,13 +191,20 @@ export function toGeoJSON(name, analysis, runs) {
       geometry: { type: 'LineString', coordinates: r.latlngs.map(([lat, lon]) => [+f7(lon), +f7(lat)]) },
     });
   }
+  for (const h of hazards) {
+    features.push({
+      type: 'Feature',
+      properties: { role: 'hazard', level: h.level, distance_m: Math.round(h.s), 'marker-color': HAZARD_LEVELS[h.level].color, 'marker-symbol': 'caution' },
+      geometry: { type: 'Point', coordinates: [+f7(h.lon), +f7(h.lat)] },
+    });
+  }
   return JSON.stringify({ type: 'FeatureCollection', features }, null, 1);
 }
 
 // KML colours are aabbggrr.
 const kmlColour = (hex) => `ff${hex.slice(5, 7)}${hex.slice(3, 5)}${hex.slice(1, 3)}`;
 
-export function toKML(name, analysis, runs, fmtSpeed = (k) => `${Math.round(k)} km/h`) {
+export function toKML(name, analysis, runs, fmtSpeed = (k) => `${Math.round(k)} km/h`, hazards = []) {
   const styles = Object.values(GRADE)
     .map((g) => `<Style id="g${g.id}"><LineStyle><color>${kmlColour(g.color)}</color><width>6</width></LineStyle></Style>`)
     .join('\n');
@@ -211,16 +218,24 @@ export function toKML(name, analysis, runs, fmtSpeed = (k) => `${Math.round(k)} 
       return `<Placemark><name>${c.number}: ${esc(noteText(c))}</name><description>${Math.round(c.radius)} m radius, ${Math.round(c.angle)}°, ~${esc(fmtSpeed(c.speedKmh))}</description><styleUrl>#g${c.grade}</styleUrl><LineString><tessellate>1</tessellate><coordinates>${coords(r.latlngs)}</coordinates></LineString></Placemark>`;
     })
     .join('\n');
+  const hazardStyles = Object.entries(HAZARD_LEVELS)
+    .map(([id, l]) => `<Style id="hz-${id}"><IconStyle><color>${kmlColour(l.color)}</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/caution.png</href></Icon></IconStyle></Style>`)
+    .join('\n');
+  const hazardMarks = hazards
+    .map((h) => `<Placemark><name>${HAZARD_LEVELS[h.level].label} hazard</name><styleUrl>#hz-${h.level}</styleUrl><Point><coordinates>${f7(h.lon)},${f7(h.lat)},0</coordinates></Point></Placemark>`)
+    .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${esc(name)}</name>
 <Style id="straight"><LineStyle><color>ffffffff</color><width>4</width></LineStyle></Style>
 ${styles}
+${hazardStyles}
 ${placemarks}
+${hazardMarks}
 </Document></kml>
 `;
 }
 
-export function toPaceNotesCSV(analysis, fmtSpeed = (k) => Math.round(k)) {
+export function toPaceNotesCSV(analysis, fmtSpeed = (k) => Math.round(k), hazards = []) {
   const rows = [['#', 'note', 'grade', 'direction', 'distance_m', 'radius_m', 'angle_deg', 'target_speed', 'driven_speed', 'lat', 'lon']];
   for (const c of analysis.corners) {
     rows.push([
@@ -236,6 +251,9 @@ export function toPaceNotesCSV(analysis, fmtSpeed = (k) => Math.round(k)) {
       f7(c.lat),
       f7(c.lon),
     ]);
+  }
+  for (const h of hazards) {
+    rows.push(['hazard', `${HAZARD_LEVELS[h.level].label} hazard`, h.level, '', Math.round(h.s), '', '', '', '', f7(h.lat), f7(h.lon)]);
   }
   return rows.map((r) => r.join(',')).join('\n') + '\n';
 }

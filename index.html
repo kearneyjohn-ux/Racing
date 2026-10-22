@@ -68,6 +68,8 @@
           </div>
           <div class="legend" id="legend"></div>
           <ol class="corner-list" id="cornerList"></ol>
+          <h2 class="section-title" id="hazardTitle">Hazards</h2>
+          <ol class="corner-list hazard-list" id="hazardList"></ol>
           <div class="card export">
             <h2>Export</h2>
             <div class="btn-row">
@@ -91,7 +93,7 @@
           </label>
           <label>Vehicle top speed (km/h)
             <input type="number" name="topSpeedKmh" min="30" max="300" step="5">
-            <small>Corners faster than this are marked Flat.</small>
+            <small>Target speeds never go above this. Fast corners are a 5.</small>
           </label>
           <label>Units
             <select name="units"><option value="kmh">km/h</option><option value="mph">mph</option></select>
@@ -118,6 +120,7 @@
           <label>Ignore bends under (degrees)
             <input type="number" name="minAngle" min="5" max="60" step="1">
           </label>
+          <label class="check"><input type="checkbox" name="listen"> Listen for hazard calls while recording (say green, orange or red)</label>
           <label class="check"><input type="checkbox" name="autoStop"> Stop recording automatically at the end of the lap</label>
           <label class="check"><input type="checkbox" name="voice"> Speak pace notes in drive mode</label>
           <label>Call corners this many seconds ahead
@@ -130,15 +133,27 @@
   </main>
 
   <div class="recording" id="recScreen" hidden>
-    <div class="rs-status" id="rsStatus" role="status">Waiting for GPS…</div>
-    <div class="rs-time" id="rsTime">0:00</div>
+    <div class="rs-head">
+      <div class="rs-status" id="rsStatus" role="status">Waiting for GPS…</div>
+      <div class="rs-time" id="rsTime">0:00</div>
+    </div>
     <div class="rs-grid">
       <div><small>Distance</small><b id="rsDist">0 m</b></div>
       <div><small>Speed</small><b><span id="rsSpeed">0</span> <span class="unit" id="rsUnit">km/h</span></b></div>
       <div><small>GPS</small><b id="rsAcc">—</b></div>
-      <div><small>Fixes</small><b id="rsFixes">0</b></div>
+      <div><small>Hazards</small><b id="rsHzCount">0</b></div>
     </div>
     <div class="rs-lap" id="rsLap" hidden>Lap complete: you're back at the start</div>
+    <div class="rs-hazards" role="group" aria-label="Mark a hazard where you are now">
+      <button class="hz" data-level="green">Green</button>
+      <button class="hz" data-level="orange">Orange</button>
+      <button class="hz" data-level="red">Red</button>
+    </div>
+    <div class="rs-hzbar">
+      <button class="btn btn-ghost" id="rsMic" aria-pressed="false">Voice off</button>
+      <span id="rsHzInfo" aria-live="polite">Tap a colour or say it to mark a hazard</span>
+      <button class="btn btn-ghost" id="rsUndo" disabled>Undo</button>
+    </div>
     <div class="rs-actions">
       <button class="btn btn-ghost" id="rsDiscard">Discard</button>
       <button class="rs-stop" id="rsStop"><span class="fill" aria-hidden="true"></span><span class="label">Hold to stop</span></button>
@@ -146,6 +161,7 @@
   </div>
 
   <div class="drive" id="drive" hidden>
+    <div class="dc-hazard" id="dcHazard" hidden></div>
     <div class="drive-card" id="dcCard">
       <div class="dc-top"><span id="dcDist">—</span><span class="dc-num" id="dcNum"></span></div>
       <div class="dc-main"><span class="dc-arrow" id="dcArrow"></span><span class="dc-grade" id="dcGrade">—</span></div>

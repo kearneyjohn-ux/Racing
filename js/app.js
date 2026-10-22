@@ -5,9 +5,14 @@ import {
   DEFAULTS,
   GRADE,
   GRADES,
+  HAZARD_LEVELS,
   haversine,
+  hazardLevelFromSpeech,
+  hazardsAhead,
   locate,
   noteText,
+  placeHazards,
+  positionAtTime,
   shortLabel,
   spokenNote,
   SURFACES,
@@ -70,6 +75,7 @@ const APP_DEFAULTS = {
   voice: true,
   leadSeconds: 5,
   autoStop: false,
+  listen: true,
   lastCourse: null,
 };
 
@@ -79,7 +85,9 @@ const state = {
   course: null,
   analysis: null,
   runs: [],
+  hazards: [],
   markers: new Map(),
+  hazardMarkers: new Map(),
   rec: null,
   drive: null,
 };
@@ -148,6 +156,16 @@ function cornerIcon(c) {
     iconAnchor: [17, 12],
   });
 }
+function hazardIcon(level) {
+  const h = HAZARD_LEVELS[level];
+  return L.divIcon({
+    className: 'hazard-marker',
+    html: `<div style="background:${h.color};color:${h.ink}">!</div>`,
+    iconSize: [28, 25],
+    iconAnchor: [14, 20],
+  });
+}
+const hzChip = (level) => `<span class="hz-chip" style="background:${HAZARD_LEVELS[level].color};color:${HAZARD_LEVELS[level].ink}">!</span>`;
 const startIcon = L.divIcon({ className: '', html: '<div class="start-marker"></div>', iconSize: [22, 22], iconAnchor: [11, 11] });
 
 function renderMap(fit) {
@@ -172,7 +190,31 @@ function renderMap(fit) {
     m.addTo(courseLayer);
     state.markers.set(c.number, m);
   }
+  state.hazardMarkers.clear();
+  (state.course.hazards ?? []).forEach((h, i) => {
+    const m = L.marker([h.lat, h.lon], { icon: hazardIcon(h.level), title: `${HAZARD_LEVELS[h.level].label} hazard`, zIndexOffset: 200 });
+    m.bindPopup(() => hazardPopupHtml(i), { maxWidth: 240 });
+    m.addTo(courseLayer);
+    state.hazardMarkers.set(i, m);
+  });
   if (fit) map.fitBounds(L.latLngBounds(all), { padding: [30, 30] });
+}
+
+function hazardPopupHtml(i) {
+  const h = state.course.hazards[i];
+  const placed = state.hazards.find((x) => x.id === i);
+  const options = Object.entries(HAZARD_LEVELS)
+    .map(([id, l]) => `<option value="${id}" ${h.level === id ? 'selected' : ''}>${l.label}</option>`)
+    .join('');
+  return `<div class="pop" data-hazard="${i}">
+    <h3>${HAZARD_LEVELS[h.level].label} hazard</h3>
+    <dl><dt>From start</dt><dd>${placed ? fmtDist(placed.s) : 'off the course line'}</dd></dl>
+    <div class="edit">
+      <select data-f="level" aria-label="Hazard level">${options}</select>
+      <button class="btn" data-f="save">Save</button>
+      <button class="btn btn-ghost" data-f="delete">Delete hazard</button>
+    </div>
+  </div>`;
 }
 
 function popupHtml(c) {
@@ -200,6 +242,23 @@ function popupHtml(c) {
 map.on('popupopen', (e) => {
   const el = e.popup.getElement()?.querySelector('.pop');
   if (!el) return;
+  if (el.dataset.hazard !== undefined) {
+    const i = Number(el.dataset.hazard);
+    el.querySelector('[data-f="save"]').addEventListener('click', () => {
+      state.course.hazards[i].level = el.querySelector('[data-f="level"]').value;
+      saveCourses();
+      map.closePopup();
+      analyse();
+    });
+    el.querySelector('[data-f="delete"]').addEventListener('click', () => {
+      state.course.hazards.splice(i, 1);
+      saveCourses();
+      map.closePopup();
+      analyse();
+      toast('Hazard deleted');
+    });
+    return;
+  }
   const c = state.analysis?.corners.find((x) => x.number === Number(el.dataset.corner));
   el.querySelector('[data-f="save"]').addEventListener('click', () => {
     saveOverride(c, el.querySelector('[data-f="grade"]').value, el.querySelector('[data-f="note"]').value.trim());
@@ -245,18 +304,20 @@ function analyse(fit = false) {
       toast(e.message);
     }
   }
+  state.hazards = state.analysis ? placeHazards(state.analysis, state.course.hazards ?? []) : [];
   renderMap(fit);
   renderCorners();
   renderCourseList();
   $('courseName').textContent = state.course ? state.course.name : 'No course loaded';
 }
 
-function addCourse(name, points) {
+function addCourse(name, points, hazards = []) {
   const course = {
     id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     name,
     created: Date.now(),
     points: pack(points),
+    hazards: hazards.map((h) => ({ lat: r7(h.lat), lon: r7(h.lon), level: h.level, t: h.t ?? null })),
     overrides: { fwd: [], rev: [] },
   };
   state.courses.unshift(course);
@@ -285,7 +346,7 @@ function renderCourseList() {
   ul.innerHTML = state.courses
     .map(
       (c) => `<li class="${state.course?.id === c.id ? 'active' : ''}" data-id="${c.id}">
-        <span class="name" data-act="open"><b>${esc(c.name)}</b><small>${new Date(c.created).toLocaleDateString()} · ${c.points.length} fixes</small></span>
+        <span class="name" data-act="open"><b>${esc(c.name)}</b><small>${new Date(c.created).toLocaleDateString()} · ${c.points.length} fixes${c.hazards?.length ? ` · ${c.hazards.length} hazards` : ''}</small></span>
         <button class="icon-btn" data-act="rename" aria-label="Rename" title="Rename">✎</button>
         <button class="icon-btn" data-act="delete" aria-label="Delete" title="Delete">✕</button>
       </li>`,
@@ -322,8 +383,6 @@ $('courseList').addEventListener('click', (e) => {
 // Corners tab
 
 function gradeRange(g, i) {
-  if (g.id === 'H') return 'hairpin';
-  if (g.id === 'F') return 'flat out';
   const lo = GRADES[i - 1]?.maxKmh;
   const u = (v) => Math.round(toUnit(v));
   if (!lo) return `< ${u(g.maxKmh)}`;
@@ -340,7 +399,8 @@ function renderCorners() {
   $('summary').innerHTML = `
     <div><small>${a.closed ? 'Loop' : 'Stage'} length</small><b>${fmtDist(a.length)}</b></div>
     <div><small>Corners</small><b>${a.corners.length}</b></div>
-    <div><small>Slowest</small><b>${slowest ? `#${slowest.number} ${shortLabel(slowest)}` : '—'}</b></div>`;
+    <div><small>Slowest</small><b>${slowest ? `#${slowest.number} ${shortLabel(slowest)}` : '—'}</b></div>
+    <div><small>Hazards</small><b>${state.course.hazards?.length ?? 0}</b></div>`;
   $('legend').innerHTML = GRADES.map(
     (g, i) => `<span><span class="chip" style="background:${g.color};color:${g.ink}">${g.id}</span>${gradeRange(g, i)}</span>`,
   ).join('');
@@ -357,8 +417,25 @@ function renderCorners() {
       </li>`;
     })
     .join('');
+  const hz = state.course.hazards ?? [];
+  $('hazardTitle').hidden = !hz.length;
+  $('hazardList').innerHTML = hz
+    .map((h, i) => {
+      const placed = state.hazards.find((x) => x.id === i);
+      return `<li data-hz="${i}"><span class="n">${i + 1}</span>${hzChip(h.level)}<span class="txt"><b>${HAZARD_LEVELS[h.level].label} hazard</b><small>${placed ? `at ${fmtDist(placed.s)}` : 'off the course line'}</small></span></li>`;
+    })
+    .join('');
   $('replayBtn').hidden = !state.course;
 }
+
+$('hazardList').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-hz]');
+  if (!li) return;
+  const i = Number(li.dataset.hz);
+  const h = state.course.hazards[i];
+  map.flyTo([h.lat, h.lon], Math.max(map.getZoom(), 17), { duration: 0.6 });
+  setTimeout(() => state.hazardMarkers.get(i)?.openPopup(), 650);
+});
 
 function highlightListItem(n) {
   for (const li of $('cornerList').children) li.classList.toggle('sel', Number(li.dataset.n) === n);
@@ -383,9 +460,10 @@ document.querySelectorAll('[data-export]').forEach((btn) =>
     if (!a) return;
     const base = state.course.name.replace(/[^\w-]+/g, '_');
     const kind = btn.dataset.export;
-    if (kind === 'kml') download(`${base}.kml`, toKML(state.course.name, a, state.runs, fmtSpeed), 'application/vnd.google-earth.kml+xml');
-    if (kind === 'geojson') download(`${base}.geojson`, toGeoJSON(state.course.name, a, state.runs), 'application/geo+json');
-    if (kind === 'csv') download(`${base}-pace-notes.csv`, toPaceNotesCSV(a, (k) => Math.round(toUnit(k))), 'text/csv');
+    const hz = state.hazards;
+    if (kind === 'kml') download(`${base}.kml`, toKML(state.course.name, a, state.runs, fmtSpeed, hz), 'application/vnd.google-earth.kml+xml');
+    if (kind === 'geojson') download(`${base}.geojson`, toGeoJSON(state.course.name, a, state.runs, hz), 'application/geo+json');
+    if (kind === 'csv') download(`${base}-pace-notes.csv`, toPaceNotesCSV(a, (k) => Math.round(toUnit(k)), hz), 'text/csv');
     if (kind === 'gpx') download(`${base}.gpx`, toGPX(state.course.name, unpack(state.course.points)), 'application/gpx+xml');
   }),
 );
@@ -438,7 +516,7 @@ function initSettings() {
     $('confOut').textContent = `${Math.round(state.settings.confidence * 100)}%`;
     if (el.name === 'units') {
       renderCorners();
-    } else if (!['voice', 'leadSeconds', 'autoStop'].includes(el.name)) {
+    } else if (!['voice', 'leadSeconds', 'autoStop', 'listen'].includes(el.name)) {
       analyse();
     }
   });
@@ -573,6 +651,8 @@ function startRecording() {
     startDir: null,
     zoneMin: null,
     lapDone: false,
+    hazards: [],
+    hazardMarkers: [],
     line: L.polyline([], { color: '#ff3b30', weight: 5 }).addTo(liveLayer),
     dot: null,
   };
@@ -590,7 +670,12 @@ function startRecording() {
   $('recScreen').hidden = false;
   $('rsLap').hidden = true;
   $('rsUnit').textContent = speedUnit();
+  document.body.classList.add('recording-on');
   map.invalidateSize();
+  unlockAudio();
+  updateHazardInfo();
+  if (state.settings.listen) startListening();
+  updateMic();
   updateRecStats();
 }
 
@@ -616,6 +701,7 @@ function onRecFix(p) {
     rec.lastGood = p;
     rec.line.addLatLng([p.lat, p.lon]);
     if (prev) checkLap(rec, prev, p);
+    if (state.rec !== rec) return; // the lap check stopped the recording
   }
 
   if (!rec.dot) {
@@ -625,9 +711,172 @@ function onRecFix(p) {
     rec.dot.setLatLng([p.lat, p.lon]);
     map.panTo([p.lat, p.lon], { animate: true, duration: 0.4 });
   }
-  if (rec.points.length % 5 === 0) store.set(REC_KEY, { started: rec.started, points: pack(rec.points) });
+  if (rec.points.length % 5 === 0) saveRecordingDraft(rec);
   updateRecStats();
 }
+
+const saveRecordingDraft = (rec) => store.set(REC_KEY, { started: rec.started, points: pack(rec.points), hazards: rec.hazards });
+
+// ---------------------------------------------------------------------------
+// Hazards while recording: big colour buttons, or say the colour.
+
+let audioCtx = null;
+function unlockAudio() {
+  try {
+    audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+  } catch {
+    audioCtx = null;
+  }
+}
+
+// Confirmation tones: one beep for green, two for orange, three lower beeps for red. Tones
+// rather than speech, so the recogniser can't hear the app saying a colour and mark it again.
+function hazardBeep(level) {
+  if (!audioCtx) return;
+  const { freq, count } = { green: { freq: 880, count: 1 }, orange: { freq: 660, count: 2 }, red: { freq: 440, count: 3 } }[level];
+  for (let i = 0; i < count; i++) {
+    const t = audioCtx.currentTime + i * 0.18;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.4, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.14);
+  }
+}
+
+let flashTimer;
+function markHazard(level, at = Date.now(), how = 'tap') {
+  const rec = state.rec;
+  if (!rec) return;
+  const good = rec.points.filter((p) => p.acc <= DEFAULTS.maxAccuracy);
+  const pos = positionAtTime(good, at);
+  if (!pos) {
+    toast('Waiting for GPS before hazards can be marked');
+    return;
+  }
+  rec.hazards.push({ lat: pos.lat, lon: pos.lon, level, t: at });
+  rec.hazardMarkers.push(L.marker([pos.lat, pos.lon], { icon: hazardIcon(level), interactive: false }).addTo(liveLayer));
+  saveRecordingDraft(rec);
+  hazardBeep(level);
+  navigator.vibrate?.(level === 'red' ? [80, 60, 80, 60, 80] : level === 'orange' ? [80, 60, 80] : 80);
+  const screen = $('recScreen');
+  screen.classList.remove('flash-green', 'flash-orange', 'flash-red');
+  screen.classList.add(`flash-${level}`);
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => screen.classList.remove(`flash-${level}`), 900);
+  updateHazardInfo(`${HAZARD_LEVELS[level].label} marked${how === 'voice' ? ' (voice)' : ''}`);
+}
+
+function undoHazard() {
+  const rec = state.rec;
+  if (!rec?.hazards.length) return;
+  const h = rec.hazards.pop();
+  rec.hazardMarkers.pop()?.remove();
+  saveRecordingDraft(rec);
+  updateHazardInfo(`${HAZARD_LEVELS[h.level].label} hazard removed`);
+}
+
+function updateHazardInfo(message) {
+  const rec = state.rec;
+  const n = rec?.hazards.length ?? 0;
+  $('rsHzCount').textContent = n;
+  $('rsUndo').disabled = !n;
+  $('rsHzInfo').textContent = message ?? (n ? `${n} hazard${n > 1 ? 's' : ''} marked` : 'Tap a colour or say it to mark a hazard');
+}
+
+document.querySelectorAll('.rs-hazards .hz').forEach((btn) =>
+  btn.addEventListener('click', () => markHazard(btn.dataset.level, Date.now(), 'tap')),
+);
+$('rsUndo').addEventListener('click', undoHazard);
+
+// Voice: continuous speech recognition while recording. Phones end recognition sessions after
+// silence, so it restarts itself until the recording stops.
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const listen = { recognizer: null, blocked: false, warned: false };
+
+function startListening() {
+  if (!SpeechRec || listen.recognizer || listen.blocked || !state.rec) return;
+  const r = new SpeechRec();
+  r.continuous = true;
+  r.interimResults = true;
+  r.maxAlternatives = 3;
+  r.lang = navigator.language || 'en-GB';
+  const handled = new Set();
+  let speechAt = null;
+  r.onspeechstart = () => (speechAt = Date.now());
+  r.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (handled.has(i)) continue;
+      const res = e.results[i];
+      const level = hazardLevelFromSpeech(Array.from(res, (alt) => alt.transcript).join(' '));
+      if (!level) continue;
+      handled.add(i);
+      // Place it where you started speaking; recognition lags the words by about a second.
+      const at = speechAt && Date.now() - speechAt < 6000 ? speechAt : Date.now() - 1000;
+      speechAt = null;
+      markHazard(level, at, 'voice');
+    }
+  };
+  r.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      listen.blocked = true;
+      toast('Microphone not allowed: use the colour buttons, or allow the microphone in your browser settings.', 6000);
+    } else if (e.error === 'network' && !listen.warned) {
+      listen.warned = true;
+      toast('Voice hazard calls need mobile data on this phone. Use the colour buttons until signal returns.', 6000);
+    }
+  };
+  r.onend = () => {
+    if (listen.recognizer !== r) return;
+    listen.recognizer = null;
+    if (state.rec && state.settings.listen && !listen.blocked) setTimeout(startListening, 400);
+    updateMic();
+  };
+  try {
+    r.start();
+    listen.recognizer = r;
+  } catch {
+    /* already started or not allowed yet */
+  }
+  updateMic();
+}
+
+function stopListening() {
+  const r = listen.recognizer;
+  listen.recognizer = null;
+  try {
+    r?.abort();
+  } catch {
+    /* ignore */
+  }
+  updateMic();
+}
+
+function updateMic() {
+  const btn = $('rsMic');
+  if (!SpeechRec) {
+    btn.hidden = true;
+    return;
+  }
+  const on = !!listen.recognizer || (state.settings.listen && !!state.rec && !listen.blocked);
+  btn.textContent = listen.blocked ? 'Mic blocked' : on ? 'Listening' : 'Voice off';
+  btn.setAttribute('aria-pressed', String(on && !listen.blocked));
+}
+
+$('rsMic').addEventListener('click', () => {
+  listen.blocked = false;
+  state.settings.listen = !(state.settings.listen && listen.recognizer);
+  saveSettings();
+  $('settingsForm').elements.listen.checked = state.settings.listen;
+  if (state.settings.listen) startListening();
+  else stopListening();
+  updateMic();
+});
 
 // A lap is complete when, after driving a while, you pass back by the start heading the same
 // way you set off. It fires at the closest point to the start, not on entering the zone.
@@ -675,9 +924,8 @@ function updateRecStats() {
     status.className = 'rs-status live';
   }
   $('rsTime').textContent = fmtTime(now - rec.started);
-  $('rsDist').textContent = fmtDist(rec.dist);
+  $('rsDist').innerHTML = rec.dist >= 1000 ? `${(rec.dist / 1000).toFixed(2)} <span class="unit">km</span>` : `${Math.round(rec.dist)} <span class="unit">m</span>`;
   $('rsSpeed').textContent = Math.round(toUnit(rec.speed * 3.6));
-  $('rsFixes').textContent = rec.points.length;
   const acc = $('rsAcc');
   acc.textContent = rec.lastAcc === null ? '—' : `±${Math.round(rec.lastAcc)} m`;
   acc.className = rec.lastAcc === null ? '' : accClass(rec.lastAcc);
@@ -690,10 +938,11 @@ function stopRecording(discard = false) {
   clearInterval(rec.timer);
   liveLayer.clearLayers();
   state.rec = null;
+  stopListening();
   keepAwake(false);
   store.del(REC_KEY);
   $('recScreen').hidden = true;
-  document.body.classList.remove('fullmode');
+  document.body.classList.remove('fullmode', 'recording-on');
   map.invalidateSize();
   initWarmup();
   if (discard) return;
@@ -701,7 +950,7 @@ function stopRecording(discard = false) {
     toast('Not enough GPS fixes were recorded to make a course.');
     return;
   }
-  addCourse(`Recorded ${new Date(rec.started).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, rec.points);
+  addCourse(`Recorded ${new Date(rec.started).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, rec.points, rec.hazards);
   if (rec.gaps) toast('GPS paused during the recording (screen off or app in the background), so parts of the track may be straight-line guesses.', 6000);
 }
 
@@ -747,7 +996,7 @@ function recoverRecording() {
   if (!saved) return;
   store.del(REC_KEY);
   if (saved.points?.length >= 10 && confirm('An unfinished recording was found. Save it as a course?')) {
-    addCourse(`Recovered ${new Date(saved.started).toLocaleString()}`, unpack(saved.points));
+    addCourse(`Recovered ${new Date(saved.started).toLocaleString()}`, unpack(saved.points), saved.hazards ?? []);
   }
 }
 
@@ -890,33 +1139,53 @@ function onDriveFix(fix) {
 
   if (loc.offset > 40) {
     showCard(null, `${Math.round(loc.offset)} m off course`);
+    showHazard(null);
     return;
   }
   const ahead = cornersAhead(a, loc.index, 2);
   const [next, after] = ahead;
   const lead = Math.max(60, v * Number(state.settings.leadSeconds || 5));
   showCard(next, null, after, v * 3.6, lead);
+  const hazards = hazardsAhead(a, state.hazards, loc.index, lead);
+  showHazard(hazards[0]);
 
-  if (!next) return;
-  const key = (item) => {
-    if (!a.closed) return item.corner.number;
-    let lap = d.lap;
-    if (item.distance > 0 && item.corner.startIdx < loc.index) lap++;
-    if (item.distance === 0 && item.corner.startIdx > loc.index) lap--;
-    return `${item.corner.number}:${lap}`;
+  // Each corner and hazard is called once per lap; keys carry the lap they belong to.
+  const lapOf = (idx, inside = false) => {
+    if (!a.closed) return 0;
+    if (inside) return idx > loc.index ? d.lap - 1 : d.lap;
+    return idx < loc.index ? d.lap + 1 : d.lap;
   };
-  if (next.distance <= lead && !d.announced.has(key(next))) {
+  const key = (item) => `c${item.corner.number}:${lapOf(item.corner.startIdx, item.distance === 0)}`;
+  const calls = [];
+  for (const { hazard } of hazards) {
+    const k = `h${hazard.id}:${lapOf(hazard.index)}`;
+    if (d.announced.has(k)) continue;
+    d.announced.add(k);
+    calls.push(`${hazard.level} hazard`);
+  }
+  if (next && next.distance <= lead && !d.announced.has(key(next))) {
     d.announced.add(key(next));
     let text = spokenNote(next.corner);
     if (next.corner.into && after) {
       d.announced.add(key(after));
       text += `, into ${spokenNote(after.corner)}`;
     }
-    if (d.voice) speak(text);
+    calls.push(text);
   }
+  if (calls.length && d.voice) speak(calls.join(', '));
 }
 
-const arrowFor = (c) => (c.dir === 'L' ? (c.grade === 'H' ? '↶' : '↰') : c.grade === 'H' ? '↷' : '↱');
+function showHazard(item) {
+  const el = $('dcHazard');
+  el.hidden = !item;
+  if (!item) return;
+  const h = HAZARD_LEVELS[item.hazard.level];
+  el.style.background = h.color;
+  el.style.color = h.ink;
+  el.textContent = `⚠ ${h.label} hazard · ${Math.round(item.distance / 10) * 10} m`;
+}
+
+const arrowFor = (c) => (c.dir === 'L' ? (c.hairpin ? '↶' : '↰') : c.hairpin ? '↷' : '↱');
 
 function showCard(item, message, after, kmh = 0, lead = 0) {
   const card = $('dcCard');
@@ -929,7 +1198,7 @@ function showCard(item, message, after, kmh = 0, lead = 0) {
     $('dcNum').textContent = '';
     $('dcArrow').textContent = '';
     $('dcGrade').textContent = message ? 'Off course' : '—';
-    $('dcGrade').style.fontSize = '';
+    $('dcGrade').style.fontSize = message ? 'clamp(40px, 9vh, 80px)' : '';
     $('dcMods').textContent = '';
     $('dcTarget').textContent = '—';
     $('dcNext').textContent = '';
@@ -942,9 +1211,9 @@ function showCard(item, message, after, kmh = 0, lead = 0) {
   $('dcDist').textContent = item.distance === 0 ? 'NOW' : `${Math.round(item.distance / 10) * 10} m`;
   $('dcNum').textContent = `#${c.number}`;
   $('dcArrow').textContent = arrowFor(c);
-  $('dcGrade').textContent = g.id === 'H' || g.id === 'F' ? g.name.toUpperCase() : g.name;
-  $('dcGrade').style.fontSize = g.name.length > 2 ? 'clamp(44px, 11vh, 100px)' : '';
-  const mods = [c.long && 'long', c.tightens && 'tightens', c.opens && 'opens', c.into && after && 'into'].filter(Boolean);
+  $('dcGrade').textContent = g.name;
+  $('dcGrade').style.fontSize = '';
+  const mods = [c.hairpin && 'hairpin', c.long && 'long', c.tightens && 'tightens', c.opens && 'opens', c.into && after && 'into'].filter(Boolean);
   if (c.note) mods.push(c.note);
   $('dcMods').textContent = mods.join(' · ');
   $('dcTarget').textContent = fmtSpeed(c.speedKmh);

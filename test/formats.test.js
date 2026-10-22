@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseTrackFile, toGPX, toKML, toGeoJSON, toPaceNotesCSV } from '../js/formats.js';
-import { analyzeCourse, colourRuns } from '../js/analysis.js';
+import { analyzeCourse, colourRuns, placeHazards } from '../js/analysis.js';
 import { buildPath, toLatLon } from '../tools/track-gen.js';
 
 const gpx = `<?xml version="1.0"?>
@@ -55,13 +55,17 @@ test('exports round-trip and carry corner colours', () => {
   const pts = toLatLon(buildPath([{ straight: 200 }, { radius: 30, angle: 90, dir: 'L' }, { straight: 200 }]));
   const a = analyzeCourse(pts);
   const runs = colourRuns(a);
+  const hz = placeHazards(a, [{ lat: a.samples[100].lat, lon: a.samples[100].lon, level: 'red' }]);
   assert.ok(parseTrackFile(toGPX('Test <1>', pts), 'a.gpx').length > 100);
-  const gj = toGeoJSON('Test', a, runs);
+  const gj = toGeoJSON('Test', a, runs, hz);
+  assert.match(gj, /"role": "hazard"/);
   assert.equal(parseTrackFile(gj, 'a.geojson').length, a.samples.length);
   assert.match(gj, /"stroke": "#/);
-  const kml = toKML('Test', a, runs);
+  const kml = toKML('Test', a, runs, undefined, hz);
   assert.match(kml, /<styleUrl>#g\w<\/styleUrl>/);
-  const csv = toPaceNotesCSV(a).trim().split('\n');
-  assert.equal(csv.length, 2);
+  assert.match(kml, /<styleUrl>#hz-red<\/styleUrl>/);
+  const csv = toPaceNotesCSV(a, undefined, hz).trim().split('\n');
+  assert.equal(csv.length, 3);
+  assert.match(csv[2], /^hazard,Red hazard,red,/);
   assert.match(csv[1], /^1,"Left \d/);
 });

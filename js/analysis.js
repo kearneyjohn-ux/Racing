@@ -17,24 +17,20 @@ export const SURFACES = {
   snow: { label: 'Snow', mu: 0.22 },
 };
 
-// Rally-style pace-note grades, slowest to fastest. Numbered grades are chosen by
-// estimated corner speed; H and F are special cases (see gradeFor).
+// Pace-note grades, 1 (slowest) to 5 (fastest), chosen by estimated corner speed.
 export const GRADES = [
-  { id: 'H', name: 'Hairpin', color: '#9e0142', ink: '#fff' },
-  { id: '1', name: '1', maxKmh: 30, color: '#d53e4f', ink: '#fff' },
-  { id: '2', name: '2', maxKmh: 45, color: '#f46d43', ink: '#fff' },
-  { id: '3', name: '3', maxKmh: 60, color: '#fdae61', ink: '#1b1b1b' },
-  { id: '4', name: '4', maxKmh: 80, color: '#fee08b', ink: '#1b1b1b' },
-  { id: '5', name: '5', maxKmh: 100, color: '#a6d96a', ink: '#1b1b1b' },
-  { id: '6', name: '6', maxKmh: Infinity, color: '#66bd63', ink: '#1b1b1b' },
-  { id: 'F', name: 'Flat', color: '#1a9850', ink: '#fff' },
+  { id: '1', name: '1', maxKmh: 30, color: '#d73027', ink: '#fff' },
+  { id: '2', name: '2', maxKmh: 45, color: '#fc8d59', ink: '#1b1b1b' },
+  { id: '3', name: '3', maxKmh: 65, color: '#fee08b', ink: '#1b1b1b' },
+  { id: '4', name: '4', maxKmh: 90, color: '#91cf60', ink: '#1b1b1b' },
+  { id: '5', name: '5', maxKmh: Infinity, color: '#1a9850', ink: '#fff' },
 ];
 export const GRADE = Object.fromEntries(GRADES.map((g) => [g.id, g]));
 
 export const DEFAULTS = {
   surface: 'gravel',
   confidence: 0.8, // share of the available grip you are prepared to use
-  topSpeedKmh: 140, // corners faster than this are "flat"
+  topSpeedKmh: 140, // target speeds are capped at the vehicle's top speed
   smoothing: 5, // metres; gaussian sigma applied to the GPS trace
   curvatureWindow: 8, // metres over which heading change is measured
   straightRadius: 150, // bends gentler than this radius count as straight
@@ -84,10 +80,8 @@ export function cornerSpeedKmh(radius, opts = DEFAULTS) {
 export function gradeFor({ radius, angle }, opts = DEFAULTS) {
   const o = { ...DEFAULTS, ...opts };
   const speedKmh = Math.min(cornerSpeedKmh(radius, o), o.topSpeedKmh);
-  if (angle >= o.hairpinAngle && radius <= o.hairpinRadius) return { grade: 'H', speedKmh };
-  if (speedKmh >= o.topSpeedKmh) return { grade: 'F', speedKmh };
-  const g = GRADES.find((gr) => gr.maxKmh && speedKmh < gr.maxKmh);
-  return { grade: g.id, speedKmh };
+  const g = GRADES.find((gr) => speedKmh < gr.maxKmh);
+  return { grade: g.id, speedKmh, hairpin: angle >= o.hairpinAngle && radius <= o.hairpinRadius };
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +397,7 @@ export function analyzeCourse(rawPoints, options = {}) {
   }
 
   const corners = detectCorners(k, turn, closed, o, ds).map((c, i) => {
-    const { grade, speedKmh } = gradeFor(c, o);
+    const { grade, speedKmh, hairpin } = gradeFor(c, o);
     const drivenList = c.indices.map((j) => driven[j]).filter(Number.isFinite);
     return {
       ...c,
@@ -417,8 +411,9 @@ export function analyzeCourse(rawPoints, options = {}) {
       autoGrade: grade,
       grade,
       speedKmh,
+      hairpin,
       drivenKmh: drivenList.length ? Math.min(...drivenList) : null,
-      long: c.angle >= 110 && grade !== 'H',
+      long: c.angle >= 110 && !hairpin,
       into: false,
       note: '',
     };
@@ -496,17 +491,18 @@ export function applyOverrides(corners, overrides = [], length = Infinity, close
 // ---------------------------------------------------------------------------
 // Pace notes
 
-export function gradeWord(id) {
-  return id === 'H' ? 'hairpin' : id === 'F' ? 'flat' : id;
+function modifiers(c) {
+  const mods = [];
+  if (c.hairpin) mods.push('hairpin');
+  if (c.long) mods.push('long');
+  if (c.tightens) mods.push('tightens');
+  if (c.opens) mods.push('opens');
+  return mods;
 }
 
 export function noteText(c) {
   const dir = c.dir === 'L' ? 'Left' : 'Right';
-  const mods = [];
-  if (c.long) mods.push('long');
-  if (c.tightens) mods.push('tightens');
-  if (c.opens) mods.push('opens');
-  const parts = [`${dir} ${GRADE[c.grade].name}`, ...mods];
+  const parts = [`${dir} ${c.grade}`, ...modifiers(c)];
   if (c.note) parts.push(`(${c.note})`);
   return parts.join(' ');
 }
@@ -516,11 +512,7 @@ export function shortLabel(c) {
 }
 
 export function spokenNote(c) {
-  const dir = c.dir === 'L' ? 'left' : 'right';
-  const words = [dir, gradeWord(c.grade)];
-  if (c.long) words.push('long');
-  if (c.tightens) words.push('tightens');
-  if (c.opens) words.push('opens');
+  const words = [c.dir === 'L' ? 'left' : 'right', c.grade, ...modifiers(c)];
   if (c.note) words.push(c.note);
   return words.join(' ');
 }
@@ -605,4 +597,74 @@ export function colourRuns(analysis) {
     }
   }
   return runs.map((r) => ({ corner: r.corner >= 0 ? corners[r.corner] : null, latlngs: r.latlngs }));
+}
+
+// ---------------------------------------------------------------------------
+// Hazards: spots marked while recording, rated green, orange or red.
+
+export const HAZARD_LEVELS = {
+  green: { label: 'Green', color: '#22c55e', ink: '#062b14' },
+  orange: { label: 'Orange', color: '#f97316', ink: '#2b1202' },
+  red: { label: 'Red', color: '#ef4444', ink: '#fff' },
+};
+
+// Snap hazards onto the analysed course; ones more than `maxOffset` metres from it are dropped.
+export function placeHazards(analysis, hazards = [], maxOffset = 40) {
+  return hazards
+    .map((h, i) => {
+      const loc = locate(analysis, h.lat, h.lon);
+      return { ...h, id: i, index: loc.index, s: loc.s, offset: loc.offset };
+    })
+    .filter((h) => h.offset <= maxOffset && HAZARD_LEVELS[h.level])
+    .sort((a, b) => a.index - b.index);
+}
+
+export function hazardsAhead(analysis, placed, index, maxDistance) {
+  const n = analysis.samples.length;
+  const out = [];
+  for (const h of placed) {
+    const d = (analysis.closed ? mod(h.index - index, n) : h.index - index) * analysis.ds;
+    if (d >= 0 && d <= maxDistance) out.push({ hazard: h, distance: d });
+  }
+  return out.sort((a, b) => a.distance - b.distance);
+}
+
+// Where the vehicle was at time `t`, interpolated between recorded fixes (sorted by time).
+// Used to place a spoken hazard where you started saying it, not where recognition finished.
+export function positionAtTime(points, t) {
+  const timed = points.filter((p) => Number.isFinite(p.t));
+  if (!timed.length) return null;
+  if (t <= timed[0].t) return { lat: timed[0].lat, lon: timed[0].lon };
+  for (let i = 1; i < timed.length; i++) {
+    const a = timed[i - 1];
+    const b = timed[i];
+    if (t <= b.t) {
+      const f = b.t > a.t ? (t - a.t) / (b.t - a.t) : 0;
+      return { lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f };
+    }
+  }
+  const last = timed.at(-1);
+  return { lat: last.lat, lon: last.lon };
+}
+
+// Spoken hazard calls. Includes the words speech recognisers commonly return instead.
+const HAZARD_WORDS = [
+  ['red', /\b(red|read|redd)\b/],
+  ['orange', /\b(orange|oranges|amber)\b/],
+  ['green', /\b(green|greene|greens)\b/],
+];
+
+// The first hazard colour said in `text`, or null.
+export function hazardLevelFromSpeech(text) {
+  const t = String(text).toLowerCase();
+  let best = null;
+  let at = Infinity;
+  for (const [level, re] of HAZARD_WORDS) {
+    const m = t.match(re);
+    if (m && m.index < at) {
+      at = m.index;
+      best = level;
+    }
+  }
+  return best;
 }

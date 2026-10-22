@@ -13,6 +13,7 @@ import {
   hazardsAhead,
   positionAtTime,
   hazardLevelFromSpeech,
+  joinTracks,
 } from '../js/analysis.js';
 import { buildPath, toLatLon, simulateGPS, speedProfile } from '../tools/track-gen.js';
 
@@ -217,4 +218,29 @@ test('hazard colours are picked out of speech', () => {
   assert.equal(hazardLevelFromSpeech('green then red'), 'green');
   assert.equal(hazardLevelFromSpeech('Greenland'), null);
   assert.equal(hazardLevelFromSpeech('left three'), null);
+});
+
+test('joining two parts fills the gap with a smooth curve', () => {
+  // One lap of the rectangle with the recording interrupted around the second corner.
+  const lap = track(rectangle, { step: 2 });
+  const cutA = lap.findIndex((p) => p.x > 310); // part a stops just into corner 1
+  const cutB = cutA + 60; // part b restarts 120 m later, past corner 1
+  const joined = joinTracks(lap.slice(0, cutA), lap.slice(cutB));
+  assert.equal(joined.overlapTrimmed, false);
+  assert.ok(joined.gap > 50 && joined.gap < 120, `gap ${joined.gap}`);
+  assert.ok(joined.points.some((p) => p.filled));
+  const a = analyzeCourse(joined.points);
+  assert.equal(a.closed, true);
+  assert.equal(a.corners.length, 4, 'the corner inside the gap is rebuilt');
+  assert.equal(a.corners.filter((c) => c.guessed).length, 1, 'and flagged as guessed');
+  assert.ok(a.samples.some((p) => p.filled));
+});
+
+test('joining trims an overlap instead of filling', () => {
+  const lap = track(rectangle, { step: 2 });
+  const joined = joinTracks(lap.slice(0, 300), lap.slice(290));
+  assert.equal(joined.overlapTrimmed, true);
+  assert.equal(joined.gap, 0);
+  assert.ok(!joined.points.some((p) => p.filled));
+  assert.equal(analyzeCourse(joined.points).corners.length, 4);
 });

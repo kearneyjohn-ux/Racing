@@ -56,6 +56,16 @@
           <h2>Saved courses</h2>
           <ul class="course-list" id="courseList"></ul>
         </div>
+
+        <div class="card" id="joinCard" hidden>
+          <h2>Join two recordings</h2>
+          <p class="muted">If the app stopped mid-lap and you started again, join the two parts into one course. Any gap between them is filled in, and the originals are kept.</p>
+          <div class="join-form">
+            <label>Part 1 (first)<select id="joinA"></select></label>
+            <label>Part 2 (after restart)<select id="joinB"></select></label>
+            <button class="btn btn-go" id="joinBtn">Join into one course</button>
+          </div>
+        </div>
       </section>
 
       <section class="tab" id="tab-corners" hidden>

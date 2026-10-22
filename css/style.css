@@ -144,6 +144,10 @@ button, input, select { font: inherit; color: inherit; }
 .course-list .name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
 .course-list .name small { color: var(--muted); }
 .course-list li.active .name b { color: var(--accent); }
+.join-form { display: grid; gap: 10px; }
+.join-form label { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
+.join-form select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font-size: 15px; }
+.guessed { color: #fee08b; }
 .icon-btn { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 6px; border-radius: 6px; }
 .icon-btn:hover { color: var(--text); background: var(--card); }
 

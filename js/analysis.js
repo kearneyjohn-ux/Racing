@@ -363,13 +363,14 @@ export function analyzeCourse(rawPoints, options = {}) {
 
   const times = pts.map((p) => (Number.isFinite(p.t) ? p.t : NaN));
   const speeds = pts.map((p) => (Number.isFinite(p.speed) && p.speed >= 0 ? p.speed : NaN));
+  const filledIn = pts.map((p) => (p.filled ? 1 : 0));
   // Gap to the neighbouring fixes, so smoothing can follow how densely each stretch was sampled.
   const gaps = xy.map((p, i) => {
     const a = i > 0 ? dist(xy[i - 1], p) : NaN;
     const b = i < xy.length - 1 ? dist(p, xy[i + 1]) : NaN;
     return Number.isFinite(a) && Number.isFinite(b) ? Math.max(a, b) : Number.isFinite(a) ? a : b;
   });
-  const rs = resample(xy, [times, speeds, gaps], o.spacing, closed);
+  const rs = resample(xy, [times, speeds, gaps, filledIn], o.spacing, closed);
   const { ds } = rs;
   const n = rs.x.length;
   if (n < 5) throw new Error('Course is too short to analyse.');
@@ -393,7 +394,7 @@ export function analyzeCourse(rawPoints, options = {}) {
   const samples = [];
   for (let i = 0; i < n; i++) {
     const [lat, lon] = proj.toLatLon(sx[i], sy[i]);
-    samples.push({ lat, lon, s: i * ds });
+    samples.push({ lat, lon, s: i * ds, filled: rs.channels[3][i] > 0.5 });
   }
 
   const corners = detectCorners(k, turn, closed, o, ds).map((c, i) => {
@@ -413,6 +414,7 @@ export function analyzeCourse(rawPoints, options = {}) {
       speedKmh,
       hairpin,
       drivenKmh: drivenList.length ? Math.min(...drivenList) : null,
+      guessed: samples[c.apexIdx].filled,
       long: c.angle >= 110 && !hairpin,
       into: false,
       note: '',
@@ -667,4 +669,68 @@ export function hazardLevelFromSpeech(text) {
     }
   }
   return best;
+}
+
+// ---------------------------------------------------------------------------
+// Joining a recording that was interrupted: part `a` then part `b`.
+// If `b` restarts on top of the end of `a`, the overlap is trimmed. Otherwise the gap is filled
+// with a smooth curve leaving `a` on its final heading and meeting `b` on its starting heading.
+// Filled points are flagged `filled: true` and have no time, so they don't affect speeds.
+
+export function joinTracks(a, b, { spacing = 5, maxAccuracy = DEFAULTS.maxAccuracy } = {}) {
+  const good = (pts) => pts.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && !(p.acc > maxAccuracy));
+  const ga = good(a);
+  const gb = good(b);
+  if (ga.length < 2 || gb.length < 2) throw new Error('Each recording needs at least 2 good GPS points to join.');
+  const proj = makeProjection(ga[0].lat, ga[0].lon);
+  const xa = ga.map((p) => proj.toXY(p.lat, p.lon));
+  const xb = gb.map((p) => proj.toXY(p.lat, p.lon));
+
+  // Overlap: part b starts on (or very near) the tail end of part a.
+  const tailFrom = Math.floor(xa.length * 0.6);
+  let near = -1;
+  let nearD = 20;
+  for (let i = tailFrom; i < xa.length; i++) {
+    const d = dist(xa[i], xb[0]);
+    if (d < nearD) {
+      nearD = d;
+      near = i;
+    }
+  }
+  if (near >= 0 && near < xa.length - 1) {
+    return { points: [...ga.slice(0, near + 1), ...gb], gap: 0, overlapTrimmed: true };
+  }
+
+  const p0 = xa.at(-1);
+  const p1 = xb[0];
+  const gap = dist(p0, p1);
+  if (gap < 3) return { points: [...ga, ...gb], gap, overlapTrimmed: false };
+
+  // Unit headings from ~15 m of track either side of the gap.
+  const headingOf = (from, to) => {
+    const len = dist(from, to) || 1;
+    return [(to[0] - from[0]) / len, (to[1] - from[1]) / len];
+  };
+  let i = xa.length - 2;
+  while (i > 0 && dist(xa[i], p0) < 15) i--;
+  let j = 1;
+  while (j < xb.length - 1 && dist(xb[j], p1) < 15) j++;
+  const t0 = headingOf(xa[i], p0);
+  const t1 = headingOf(p1, xb[j]);
+
+  // Cubic Hermite curve; tangent length equal to the gap gives a natural, unforced bend.
+  const filled = [];
+  const n = Math.max(1, Math.ceil(gap / spacing));
+  for (let k = 1; k < n; k++) {
+    const u = k / n;
+    const h00 = 2 * u ** 3 - 3 * u ** 2 + 1;
+    const h10 = u ** 3 - 2 * u ** 2 + u;
+    const h01 = -2 * u ** 3 + 3 * u ** 2;
+    const h11 = u ** 3 - u ** 2;
+    const x = h00 * p0[0] + h10 * gap * t0[0] + h01 * p1[0] + h11 * gap * t1[0];
+    const y = h00 * p0[1] + h10 * gap * t0[1] + h01 * p1[1] + h11 * gap * t1[1];
+    const [lat, lon] = proj.toLatLon(x, y);
+    filled.push({ lat, lon, t: NaN, acc: NaN, speed: NaN, filled: true });
+  }
+  return { points: [...ga, ...filled, ...gb], gap, overlapTrimmed: false };
 }

@@ -14,6 +14,7 @@ It runs in the phone's browser, so there's nothing to install. You can add it to
    - The track is saved every few seconds. If the browser is closed mid-lap, it offers to recover the recording next time you open the app.
    - Keep the app open with the screen on (it keeps the screen awake for you). Phones pause GPS for web apps in the background. If that happens you're warned that part of the track was guessed.
    - If you drive more than one lap, only the first full lap is used.
+   - **If the app stopped mid-lap** and you started again, go to *Course → Join two recordings*, pick part 1 and part 2, and tap **Join**. Any gap between them is filled with a smooth curve (dotted on the map), and corners inside the gap are marked as guesses. If the two parts overlap, the overlap is trimmed instead. The originals are kept.
    - Or **import a file** from a GPS logger, lap timer, sports watch or Strava/Garmin export: GPX, KML, GeoJSON, CSV (with `lat`/`lon` columns) or NMEA.
    - Or tap **Load demo course** to try it at home.
 3. **Check the corners.** Each corner gets a rally-style grade and a target speed, and the course is colour-coded on a satellite map:

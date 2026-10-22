@@ -10,6 +10,7 @@ import {
   hazardLevelFromSpeech,
   hazardsAhead,
   locate,
+  joinTracks,
   noteText,
   placeHazards,
   positionAtTime,
@@ -58,9 +59,15 @@ const store = {
 
 const r7 = (v) => (Number.isFinite(v) ? Math.round(v * 1e7) / 1e7 : null);
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
-const pack = (pts) => pts.map((p) => [r7(p.lat), r7(p.lon), Number.isFinite(p.t) ? p.t : null, r1(p.acc), r1(p.speed)]);
+// Points are stored as [lat, lon, time, accuracy, speed] plus a trailing 1 for gap-filled points.
+const pack = (pts) =>
+  pts.map((p) => {
+    const row = [r7(p.lat), r7(p.lon), Number.isFinite(p.t) ? p.t : null, r1(p.acc), r1(p.speed)];
+    if (p.filled) row.push(1);
+    return row;
+  });
 const unpack = (rows) =>
-  rows.map(([lat, lon, t, acc, speed]) => ({ lat, lon, t: t ?? NaN, acc: acc ?? NaN, speed: speed ?? NaN }));
+  rows.map(([lat, lon, t, acc, speed, filled]) => ({ lat, lon, t: t ?? NaN, acc: acc ?? NaN, speed: speed ?? NaN, filled: filled === 1 }));
 
 const APP_DEFAULTS = {
   surface: DEFAULTS.surface,
@@ -182,6 +189,19 @@ function renderMap(fit) {
     const line = L.polyline(r.latlngs, { color, weight: r.corner ? 7 : 4, opacity: 1 }).addTo(courseLayer);
     if (r.corner) line.on('click', () => focusCorner(r.corner.number));
   }
+  // Gap-filled stretches (from joining two recordings) are dotted: they weren't driven with GPS on.
+  let gapRun = null;
+  for (const p of a.closed ? [...a.samples, a.samples[0]] : a.samples) {
+    if (p.filled) {
+      gapRun ??= [];
+      gapRun.push([p.lat, p.lon]);
+    } else if (gapRun) {
+      gapRun.push([p.lat, p.lon]);
+      L.polyline(gapRun, { color: '#000', weight: 7, dashArray: '2 10', opacity: 0.9, interactive: false }).addTo(courseLayer);
+      gapRun = null;
+    }
+  }
+  if (gapRun) L.polyline(gapRun, { color: '#000', weight: 7, dashArray: '2 10', opacity: 0.9, interactive: false }).addTo(courseLayer);
   L.marker(all[0], { icon: startIcon, title: 'Start', zIndexOffset: -100 }).addTo(courseLayer);
   if (!a.closed) L.marker(all.at(-1), { icon: startIcon, title: 'Finish', zIndexOffset: -100 }).addTo(courseLayer);
   for (const c of a.corners) {
@@ -230,6 +250,7 @@ function popupHtml(c) {
       <dt>Radius</dt><dd>${Math.round(c.radius)} m</dd>
       <dt>Turns</dt><dd>${Math.round(c.angle)}°</dd>
       <dt>From start</dt><dd>${fmtDist(c.startS)}</dd>
+      ${c.guessed ? '<dt>Note</dt><dd class="guessed">In a filled gap: shape is a guess</dd>' : ''}
     </dl>
     <div class="edit">
       <select data-f="grade" aria-label="Grade">${options}</select>
@@ -337,7 +358,50 @@ function selectCourse(course, quiet = false) {
   }
 }
 
+function renderJoinCard() {
+  $('joinCard').hidden = state.courses.length < 2;
+  if (state.courses.length < 2) return;
+  const label = (c) => `${new Date(c.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · ${c.points.length} fixes · ${c.name}`;
+  const options = state.courses.map((c) => `<option value="${c.id}">${esc(label(c))}</option>`).join('');
+  const keepA = $('joinA').value;
+  const keepB = $('joinB').value;
+  $('joinA').innerHTML = options;
+  $('joinB').innerHTML = options;
+  // Default: the two newest recordings, older one first.
+  const has = (id) => state.courses.some((c) => c.id === id);
+  $('joinA').value = has(keepA) ? keepA : state.courses[1].id;
+  $('joinB').value = has(keepB) ? keepB : state.courses[0].id;
+}
+
+$('joinBtn').addEventListener('click', () => {
+  const a = state.courses.find((c) => c.id === $('joinA').value);
+  const b = state.courses.find((c) => c.id === $('joinB').value);
+  if (!a || !b || a === b) {
+    toast('Pick two different recordings to join.');
+    return;
+  }
+  try {
+    const res = joinTracks(unpack(a.points), unpack(b.points));
+    const when = new Date(a.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    addCourse(`Joined lap ${when}`, res.points, [...(a.hazards ?? []), ...(b.hazards ?? [])]);
+    $('joinA').value = '';
+    $('joinB').value = '';
+    renderJoinCard();
+    toast(
+      res.overlapTrimmed
+        ? 'Joined. The two parts overlapped, so the overlap was trimmed.'
+        : res.gap >= 3
+          ? `Joined. A ${Math.round(res.gap)} m gap was filled in (dotted on the map); any corner in it is a guess.`
+          : 'Joined into one course.',
+      7000,
+    );
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
 function renderCourseList() {
+  renderJoinCard();
   const ul = $('courseList');
   if (!state.courses.length) {
     ul.innerHTML = '<li class="muted">Nothing saved yet.</li>';
@@ -412,7 +476,7 @@ function renderCorners() {
       return `<li data-n="${c.number}">
         <span class="n">${c.number}</span>
         <span class="chip" style="background:${g.color};color:${g.ink}">${esc(shortLabel(c))}</span>
-        <span class="txt"><b>${esc(noteText(c))}${edited}</b><small>${Math.round(c.radius)} m radius · ${Math.round(c.angle)}° · at ${fmtDist(c.startS)}${driven}</small></span>
+        <span class="txt"><b>${esc(noteText(c))}${edited}</b><small>${Math.round(c.radius)} m radius · ${Math.round(c.angle)}° · at ${fmtDist(c.startS)}${driven}${c.guessed ? ' · <span class="guessed">guessed (filled gap)</span>' : ''}</small></span>
         <span class="spd"><b>${Math.round(toUnit(c.speedKmh))}</b><small>${speedUnit()}</small></span>
       </li>`;
     })

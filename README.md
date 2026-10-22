@@ -80,3 +80,7 @@ npm run demo    # regenerate samples/demo-course.gpx
 - `js/app.js`: map (Leaflet), recording, corner list, settings, drive mode
 - `sw.js`: offline cache for the app and any map tiles you've viewed
 - `tools/`: synthetic track generator used by the tests and the demo course
+
+## Logo
+
+`assets/` holds the Westlime Motorsport logo as vectors (`westlime-logo.svg` stacked, `westlime-logo-wide.svg` for the app footer) and transparent PNGs for print or social media. The lettering is converted to outlines from Cinzel and Kaushan Script (both SIL Open Font License), so the files don't need any fonts installed.

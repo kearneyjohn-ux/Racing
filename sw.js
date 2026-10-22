@@ -1,7 +1,7 @@
 // Offline support: the app shell is cached so it opens at a track with no signal, and map
 // tiles you have already viewed (e.g. at home on Wi-Fi) are kept for later.
 
-const VERSION = 'rcp-v6';
+const VERSION = 'rcp-v7';
 const SHELL = [
   './',
   'index.html',
@@ -11,6 +11,7 @@ const SHELL = [
   'js/formats.js',
   'manifest.webmanifest',
   'icon.svg',
+  'assets/westlime-logo-wide.svg',
   'samples/demo-course.gpx',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',

@@ -91,6 +91,16 @@ button, input, select { font: inherit; color: inherit; }
   min-height: 0;
 }
 .grip { display: none; }
+.panel-footer {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 8px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.panel-footer img { display: block; height: 40px; width: auto; max-width: 100%; }
 .tabs { display: flex; border-bottom: 1px solid var(--line); }
 .tabs button {
   flex: 1;

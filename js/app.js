@@ -69,6 +69,7 @@ const APP_DEFAULTS = {
   minAngle: DEFAULTS.minAngle,
   voice: true,
   leadSeconds: 5,
+  autoStop: false,
   lastCourse: null,
 };
 
@@ -437,7 +438,7 @@ function initSettings() {
     $('confOut').textContent = `${Math.round(state.settings.confidence * 100)}%`;
     if (el.name === 'units') {
       renderCorners();
-    } else if (!['voice', 'leadSeconds'].includes(el.name)) {
+    } else if (!['voice', 'leadSeconds', 'autoStop'].includes(el.name)) {
       analyse();
     }
   });
@@ -479,7 +480,7 @@ function gpsSupported() {
   return true;
 }
 
-function watchGPS(onFix, onError) {
+function watchGPS(onFix, onError, quiet = false) {
   const id = navigator.geolocation.watchPosition(
     (pos) => {
       const c = pos.coords;
@@ -493,6 +494,8 @@ function watchGPS(onFix, onError) {
       });
     },
     (err) => {
+      // Brief outages are common; in quiet mode the screen's own status shows them instead.
+      if (quiet && err.code !== err.PERMISSION_DENIED) return;
       if (err.code === err.PERMISSION_DENIED) toast('Location permission was denied. Allow it in your browser settings.');
       else if (err.code === err.TIMEOUT) toast('Waiting for a GPS fix… make sure you have a clear view of the sky.');
       else toast(err.message ? `GPS error: ${err.message}` : 'GPS signal lost, waiting for a fix…');
@@ -506,60 +509,177 @@ function watchGPS(onFix, onError) {
 const accClass = (acc) => (acc <= 8 ? 'acc-good' : acc <= 20 ? 'acc-ok' : 'acc-bad');
 
 // ---------------------------------------------------------------------------
+// GPS warm-up: once location permission has been granted, watch GPS while idle so the
+// record button shows signal quality and the first fix is ready the moment you tap it.
+
+let warm = null;
+
+function startWarmup() {
+  if (warm || state.rec || state.drive || !('geolocation' in navigator) || !window.isSecureContext) return;
+  warm = watchGPS((p) => showGpsReady(p.acc), null, true);
+}
+
+function stopWarmup() {
+  warm?.();
+  warm = null;
+}
+
+function showGpsReady(acc) {
+  const el = $('fabGps');
+  if (acc === null) {
+    el.textContent = 'Tap to start';
+    el.className = '';
+    return;
+  }
+  el.textContent = `${acc <= 20 ? 'GPS ready' : 'GPS weak'} ±${Math.round(acc)} m`;
+  el.className = accClass(acc);
+}
+
+async function initWarmup() {
+  try {
+    const perm = await navigator.permissions?.query({ name: 'geolocation' });
+    if (!perm) return;
+    if (perm.state === 'granted') startWarmup();
+    perm.addEventListener('change', () => perm.state === 'granted' && startWarmup());
+  } catch {
+    /* Permissions API not supported (older Safari): GPS starts when you tap Record */
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Recording
 
+const LAP_MIN_DIST = 300; // metres driven before a return to the start counts as a lap
+const LAP_ZONE = 25; // metres from the start point
+
+function bearing(a, b) {
+  const dx = (b.lon - a.lon) * Math.cos((a.lat * Math.PI) / 180);
+  return (Math.atan2(dx, b.lat - a.lat) * 180) / Math.PI;
+}
+
 function startRecording() {
-  if (!gpsSupported()) return;
+  if (state.rec || state.drive || !gpsSupported()) return;
+  stopWarmup();
   const rec = {
     points: [],
     started: Date.now(),
+    lastFixAt: null,
+    gaps: 0,
     dist: 0,
+    speed: 0,
     lastAcc: null,
     lastGood: null,
+    first: null,
+    startDir: null,
+    zoneMin: null,
+    lapDone: false,
     line: L.polyline([], { color: '#ff3b30', weight: 5 }).addTo(liveLayer),
     dot: null,
   };
   state.rec = rec;
   rec.stop = watchGPS(
-    (p) => {
-      rec.lastAcc = p.acc;
-      rec.points.push(p);
-      if (p.acc <= DEFAULTS.maxAccuracy) {
-        if (rec.lastGood) rec.dist += haversine(rec.lastGood, p);
-        rec.lastGood = p;
-        rec.line.addLatLng([p.lat, p.lon]);
-      }
-      if (!rec.dot) {
-        rec.dot = L.circleMarker([p.lat, p.lon], { radius: 7, color: '#fff', weight: 3, fillColor: '#ff3b30', fillOpacity: 1 }).addTo(liveLayer);
-        map.setView([p.lat, p.lon], 17);
-      } else {
-        rec.dot.setLatLng([p.lat, p.lon]);
-        if (!map.getBounds().pad(-0.25).contains([p.lat, p.lon])) map.panTo([p.lat, p.lon]);
-      }
-      if (rec.points.length % 10 === 0) store.set(REC_KEY, { started: rec.started, points: pack(rec.points) });
-      updateRecStats();
-    },
+    onRecFix,
     (err) => {
       if (err.code === err.PERMISSION_DENIED) stopRecording(true);
     },
+    true,
   );
   rec.timer = setInterval(updateRecStats, 1000);
   keepAwake(true);
-  $('recBtn').classList.add('recording');
-  $('recLabel').textContent = 'Stop & analyse';
-  $('recStats').hidden = false;
+  document.body.classList.add('fullmode');
+  $('recScreen').hidden = false;
+  $('rsLap').hidden = true;
+  $('rsUnit').textContent = speedUnit();
+  map.invalidateSize();
   updateRecStats();
-  toast('Recording. Keep the screen on and drive one lap.');
+}
+
+function onRecFix(p) {
+  const rec = state.rec;
+  if (!rec) return;
+  const now = Date.now();
+  if (rec.lastFixAt && now - rec.lastFixAt > 10000) rec.gaps++;
+  rec.lastFixAt = now;
+  rec.lastAcc = p.acc;
+  rec.points.push(p);
+
+  if (p.acc <= DEFAULTS.maxAccuracy) {
+    const prev = rec.lastGood;
+    if (prev) {
+      const d = haversine(prev, p);
+      const dt = (p.t - prev.t) / 1000;
+      rec.dist += d;
+      rec.speed = Number.isFinite(p.speed) ? p.speed : dt > 0 ? d / dt : rec.speed;
+    } else {
+      rec.first = p;
+    }
+    rec.lastGood = p;
+    rec.line.addLatLng([p.lat, p.lon]);
+    if (prev) checkLap(rec, prev, p);
+  }
+
+  if (!rec.dot) {
+    rec.dot = L.circleMarker([p.lat, p.lon], { radius: 8, color: '#fff', weight: 3, fillColor: '#ff3b30', fillOpacity: 1 }).addTo(liveLayer);
+    map.setView([p.lat, p.lon], 17);
+  } else {
+    rec.dot.setLatLng([p.lat, p.lon]);
+    map.panTo([p.lat, p.lon], { animate: true, duration: 0.4 });
+  }
+  if (rec.points.length % 5 === 0) store.set(REC_KEY, { started: rec.started, points: pack(rec.points) });
+  updateRecStats();
+}
+
+// A lap is complete when, after driving a while, you pass back by the start heading the same
+// way you set off. It fires at the closest point to the start, not on entering the zone.
+function checkLap(rec, prev, p) {
+  if (rec.lapDone) return;
+  if (rec.startDir === null) {
+    if (haversine(rec.first, p) >= 10) rec.startDir = bearing(rec.first, p);
+    return;
+  }
+  const d = haversine(rec.first, p);
+  const turn = Math.abs(((bearing(prev, p) - rec.startDir + 540) % 360) - 180);
+  const inZone = rec.dist >= LAP_MIN_DIST && d <= LAP_ZONE && turn <= 60;
+  if (inZone && d > 6 && (rec.zoneMin === null || d <= rec.zoneMin + 2)) {
+    rec.zoneMin = Math.min(d, rec.zoneMin ?? d);
+    return;
+  }
+  // Not near the start, and never was: nothing to do.
+  if (!inZone && rec.zoneMin === null) return;
+  // Otherwise the start has been passed: very close, moving away again, or out of the zone
+  // (at speed with 1 Hz GPS there may be only one fix inside it).
+  rec.lapDone = true;
+  $('rsLap').hidden = false;
+  navigator.vibrate?.([200, 100, 200]);
+  if (state.settings.autoStop) {
+    speak('Lap complete. Recording stopped.');
+    stopRecording();
+  } else {
+    speak('Lap complete');
+  }
 }
 
 function updateRecStats() {
   const rec = state.rec;
   if (!rec) return;
-  $('recTime').textContent = fmtTime(Date.now() - rec.started);
-  $('recDist').textContent = fmtDist(rec.dist);
-  $('recFixes').textContent = rec.points.length;
-  const acc = $('recAcc');
-  acc.textContent = rec.lastAcc === null ? 'searching…' : `±${Math.round(rec.lastAcc)} m`;
+  const now = Date.now();
+  const status = $('rsStatus');
+  if (rec.lastFixAt === null) {
+    status.textContent = 'Waiting for GPS… stay put until it locks on';
+    status.className = 'rs-status';
+  } else if (now - rec.lastFixAt > 5000) {
+    status.textContent = 'GPS signal lost: keep the app open and the screen on';
+    status.className = 'rs-status lost';
+  } else {
+    status.textContent = 'Recording';
+    status.className = 'rs-status live';
+  }
+  $('rsTime').textContent = fmtTime(now - rec.started);
+  $('rsDist').textContent = fmtDist(rec.dist);
+  $('rsSpeed').textContent = Math.round(toUnit(rec.speed * 3.6));
+  $('rsFixes').textContent = rec.points.length;
+  const acc = $('rsAcc');
+  acc.textContent = rec.lastAcc === null ? '—' : `±${Math.round(rec.lastAcc)} m`;
   acc.className = rec.lastAcc === null ? '' : accClass(rec.lastAcc);
 }
 
@@ -572,18 +692,55 @@ function stopRecording(discard = false) {
   state.rec = null;
   keepAwake(false);
   store.del(REC_KEY);
-  $('recBtn').classList.remove('recording');
-  $('recLabel').textContent = 'Record course';
-  $('recStats').hidden = true;
+  $('recScreen').hidden = true;
+  document.body.classList.remove('fullmode');
+  map.invalidateSize();
+  initWarmup();
   if (discard) return;
   if (rec.points.length < 10) {
     toast('Not enough GPS fixes were recorded to make a course.');
     return;
   }
   addCourse(`Recorded ${new Date(rec.started).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, rec.points);
+  if (rec.gaps) toast('GPS paused during the recording (screen off or app in the background), so parts of the track may be straight-line guesses.', 6000);
 }
 
-$('recBtn').addEventListener('click', () => (state.rec ? stopRecording() : startRecording()));
+// Stopping needs a deliberate 1-second press so a bump or stray tap can't end the recording.
+function holdToActivate(btn, ms, action) {
+  let timer = null;
+  const release = (hint) => {
+    if (timer && hint) toast('Hold the button to stop');
+    clearTimeout(timer);
+    timer = null;
+    btn.classList.remove('holding');
+  };
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    btn.classList.add('holding');
+    timer = setTimeout(() => {
+      timer = null;
+      btn.classList.remove('holding');
+      action();
+    }, ms);
+  });
+  btn.addEventListener('pointerup', () => release(true));
+  btn.addEventListener('pointerleave', () => release(false));
+  btn.addEventListener('pointercancel', () => release(false));
+  btn.addEventListener('contextmenu', (e) => e.preventDefault());
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      action();
+    }
+  });
+}
+
+$('recFab').addEventListener('click', startRecording);
+$('recBtn').addEventListener('click', startRecording);
+holdToActivate($('rsStop'), 1000, () => stopRecording());
+$('rsDiscard').addEventListener('click', () => {
+  if (confirm('Discard this recording? The track will be lost.')) stopRecording(true);
+});
 
 function recoverRecording() {
   const saved = store.get(REC_KEY, null);
@@ -658,7 +815,8 @@ function startDrive(replay = false) {
     toast('No corners to call on this course.');
     return;
   }
-  if (!replay && !gpsSupported()) return;
+  if (state.rec || (!replay && !gpsSupported())) return;
+  stopWarmup();
   const d = {
     replay,
     hint: -1,
@@ -670,7 +828,7 @@ function startDrive(replay = false) {
     marker: L.circleMarker([a.samples[0].lat, a.samples[0].lon], { radius: 9, color: '#fff', weight: 3, fillColor: '#3fa7ff', fillOpacity: 1 }).addTo(liveLayer),
   };
   state.drive = d;
-  document.body.classList.add('driving');
+  document.body.classList.add('fullmode');
   $('drive').hidden = false;
   $('dcUnit').textContent = speedUnit();
   setVoiceButton();
@@ -678,7 +836,7 @@ function startDrive(replay = false) {
   map.setView([a.samples[0].lat, a.samples[0].lon], 17);
   showCard(null);
   if (d.voice) speak('Pace notes ready');
-  d.stop = replay ? replaySource(onDriveFix) : watchGPS(onDriveFix);
+  d.stop = replay ? replaySource(onDriveFix) : watchGPS(onDriveFix, null, true);
   keepAwake(true);
 }
 
@@ -691,8 +849,9 @@ function stopDrive() {
   keepAwake(false);
   if ('speechSynthesis' in window) speechSynthesis.cancel();
   $('drive').hidden = true;
-  document.body.classList.remove('driving');
+  document.body.classList.remove('fullmode');
   map.invalidateSize();
+  initWarmup();
 }
 
 function setVoiceButton() {
@@ -819,6 +978,7 @@ renderCorners();
 const last = state.courses.find((c) => c.id === state.settings.lastCourse) ?? state.courses[0];
 if (last) selectCourse(last, true);
 recoverRecording();
+initWarmup();
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

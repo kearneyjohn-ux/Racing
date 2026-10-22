@@ -7,7 +7,13 @@ It runs in the phone's browser, so there's nothing to install. You can add it to
 ## How to use it
 
 1. **Open the app on your phone** (see [Hosting](#hosting); it must be served over `https://` for GPS to work).
-2. **Record a lap.** Mount the phone with a clear view of the sky, tap **Record course** and drive one lap at a steady, sensible pace. Tap **Stop & analyse** when you're back at the start. If you drive more than one lap, only the first full lap is used. The screen stays on while recording, because most phones throttle GPS when the screen sleeps.
+2. **Record a lap.** Recording is the app's main job, so the big red **Record** button is always on the map, one tap from opening the app. Before you start, the button shows your GPS signal ("GPS ready ±4 m"); wait for green if you can. Then:
+   - The screen switches to a large recording view: timer, distance, speed, GPS accuracy, and the track drawing on the map.
+   - When you pass back by the start line, the phone buzzes and says "Lap complete". Turn on *Settings → Stop recording automatically at the end of the lap* to have it stop there by itself.
+   - Stopping takes a **1-second press-and-hold**, so a bump or a stray tap can't end it early.
+   - The track is saved every few seconds. If the browser is closed mid-lap, it offers to recover the recording next time you open the app.
+   - Keep the app open with the screen on (it keeps the screen awake for you). Phones pause GPS for web apps in the background. If that happens you're warned that part of the track was guessed.
+   - If you drive more than one lap, only the first full lap is used.
    - Or **import a file** from a GPS logger, lap timer, sports watch or Strava/Garmin export: GPX, KML, GeoJSON, CSV (with `lat`/`lon` columns) or NMEA.
    - Or tap **Load demo course** to try it at home.
 3. **Check the corners.** Each corner gets a rally-style grade and a target speed, and the course is colour-coded on a satellite map:

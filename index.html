@@ -20,7 +20,13 @@
   </header>
 
   <main class="layout">
-    <div id="map" class="map" aria-label="Course map"></div>
+    <div class="map-wrap">
+      <div id="map" class="map" aria-label="Course map"></div>
+      <button class="rec-fab" id="recFab" aria-label="Record a course">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="fab-text"><b>Record</b><small id="fabGps">Tap to start</small></span>
+      </button>
+    </div>
 
     <aside class="panel" id="panel">
       <button class="grip" id="panelGrip" aria-label="Expand or collapse panel"></button>
@@ -33,16 +39,8 @@
       <section class="tab" id="tab-course">
         <div class="card">
           <h2>Record with this phone</h2>
-          <p class="muted">Mount the phone, press record and drive one lap. Stop when you cross the start again — extra laps are trimmed automatically.</p>
-          <div class="rec-row">
-            <button class="btn btn-rec" id="recBtn"><span class="dot"></span><span id="recLabel">Record course</span></button>
-          </div>
-          <dl class="stats" id="recStats" hidden>
-            <div><dt>Time</dt><dd id="recTime">0:00</dd></div>
-            <div><dt>Distance</dt><dd id="recDist">0 m</dd></div>
-            <div><dt>Fixes</dt><dd id="recFixes">0</dd></div>
-            <div><dt>GPS accuracy</dt><dd id="recAcc">—</dd></div>
-          </dl>
+          <p class="muted">Mount the phone high on the windscreen, tap record at the start line and drive one lap. Keep the app open with the screen on: phones pause GPS for web apps in the background.</p>
+          <button class="btn btn-rec" id="recBtn"><span class="dot"></span><span>Record course</span></button>
         </div>
 
         <div class="card">
@@ -120,6 +118,7 @@
           <label>Ignore bends under (degrees)
             <input type="number" name="minAngle" min="5" max="60" step="1">
           </label>
+          <label class="check"><input type="checkbox" name="autoStop"> Stop recording automatically at the end of the lap</label>
           <label class="check"><input type="checkbox" name="voice"> Speak pace notes in drive mode</label>
           <label>Call corners this many seconds ahead
             <input type="number" name="leadSeconds" min="2" max="10" step="1">
@@ -129,6 +128,22 @@
       </section>
     </aside>
   </main>
+
+  <div class="recording" id="recScreen" hidden>
+    <div class="rs-status" id="rsStatus" role="status">Waiting for GPS…</div>
+    <div class="rs-time" id="rsTime">0:00</div>
+    <div class="rs-grid">
+      <div><small>Distance</small><b id="rsDist">0 m</b></div>
+      <div><small>Speed</small><b><span id="rsSpeed">0</span> <span class="unit" id="rsUnit">km/h</span></b></div>
+      <div><small>GPS</small><b id="rsAcc">—</b></div>
+      <div><small>Fixes</small><b id="rsFixes">0</b></div>
+    </div>
+    <div class="rs-lap" id="rsLap" hidden>Lap complete: you're back at the start</div>
+    <div class="rs-actions">
+      <button class="btn btn-ghost" id="rsDiscard">Discard</button>
+      <button class="rs-stop" id="rsStop"><span class="fill" aria-hidden="true"></span><span class="label">Hold to stop</span></button>
+    </div>
+  </div>
 
   <div class="drive" id="drive" hidden>
     <div class="drive-card" id="dcCard">

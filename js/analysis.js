@@ -431,29 +431,30 @@ export function analyzeCourse(rawPoints, options = {}) {
     samples.push({ lat, lon, s: i * ds, filled: rs.channels[3][i] > 0.5 });
   }
 
-  const corners = detectCorners(k, turn, closed, o, ds).map((c, i) => {
-    const { grade, speedKmh, hairpin } = gradeFor(c, o);
-    const drivenList = c.indices.map((j) => driven[j]).filter(Number.isFinite);
-    return {
-      ...c,
-      id: i + 1,
-      number: i + 1,
-      startS: c.startIdx * ds,
-      endS: c.endIdx * ds,
-      apexS: c.apexIdx * ds,
-      lat: samples[c.apexIdx].lat,
-      lon: samples[c.apexIdx].lon,
-      autoGrade: grade,
-      grade,
-      speedKmh,
-      hairpin,
-      drivenKmh: drivenList.length ? Math.min(...drivenList) : null,
-      guessed: samples[c.apexIdx].filled,
-      long: c.angle >= 110 && !hairpin,
-      into: false,
-      note: '',
-    };
-  });
+  const corners = detectCorners(k, turn, closed, o, ds)
+    .map((c) => {
+      const { grade, speedKmh, hairpin } = gradeFor(c, o);
+      const drivenList = c.indices.map((j) => driven[j]).filter(Number.isFinite);
+      return {
+        ...c,
+        startS: c.startIdx * ds,
+        endS: c.endIdx * ds,
+        apexS: c.apexIdx * ds,
+        lat: samples[c.apexIdx].lat,
+        lon: samples[c.apexIdx].lon,
+        autoGrade: grade,
+        grade,
+        speedKmh,
+        hairpin,
+        drivenKmh: drivenList.length ? Math.min(...drivenList) : null,
+        guessed: samples[c.apexIdx].filled,
+        long: c.angle >= 110 && !hairpin,
+        into: false,
+        note: '',
+      };
+    })
+    .filter((c) => !isManoeuvre(c))
+    .map((c, i) => ({ ...c, id: i + 1, number: i + 1 }));
 
   for (let i = 0; i < corners.length; i++) {
     const next = corners[i + 1] ?? (closed ? corners[0] : null);
@@ -477,6 +478,17 @@ export function analyzeCourse(rawPoints, options = {}) {
     _y: sy,
     _proj: proj,
   };
+}
+
+// Not a race corner: tighter than any vehicle can turn (GPS noise), or a tight turn taken at
+// walking pace (pulling over, parking, turning round).
+const NOISE_RADIUS = 2.5; // metres
+const MANOEUVRE_RADIUS = 6; // metres
+const MANOEUVRE_KMH = 4;
+
+export function isManoeuvre(c) {
+  if (c.radius < NOISE_RADIUS) return true;
+  return c.radius < MANOEUVRE_RADIUS && c.drivenKmh !== null && c.drivenKmh < MANOEUVRE_KMH;
 }
 
 function drivenSpeeds(t, v, ds, closed) {

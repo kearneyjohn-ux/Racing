@@ -14,6 +14,7 @@ import {
   positionAtTime,
   hazardLevelFromSpeech,
   joinTracks,
+  isManoeuvre,
 } from '../js/analysis.js';
 import { buildPath, toLatLon, simulateGPS, speedProfile, rng } from '../tools/track-gen.js';
 
@@ -269,4 +270,57 @@ test('a rest stop on a straight does not become a corner', () => {
     assert.equal(a.corners.length, 0, `${withSpeed ? 'with' : 'without'} GPS speed: ${a.corners.map((c) => `${Math.round(c.angle)}° r${c.radius.toFixed(1)}`).join(', ')}`);
     assert.ok(Math.abs(a.length - 750) < 30, `length ${a.length}`);
   }
+});
+
+// A messier stop: slow roll in and out, poor accuracy under trees, GPS drifting up to ~15 m,
+// and the phone reporting speed as invalid (-1) while parked.
+test('a rest stop with poor GPS and a slow roll in/out does not become a corner', () => {
+  const rand = rng(9);
+  const pts = [];
+  let t = Date.UTC(2026, 9, 1, 9);
+  let x = 0;
+  const push = (px, py, speed, acc) => pts.push({ x: px, y: py, t: (t += 1000), speed, acc });
+  for (let i = 0; i < 25; i++) push((x += 15), 0, 15, 4);
+  for (const v of [10, 6, 3, 1.5, 0.6]) push((x += v), 0, v, 6); // braking
+  let jx = 0;
+  let jy = 0;
+  for (let i = 0; i < 150; i++) {
+    jx = 0.9 * jx + 2.5 * rand.gauss();
+    jy = 0.9 * jy + 2.5 * rand.gauss();
+    push(x + jx, jy, i % 3 ? -1 : Math.abs(0.3 * rand.gauss()), 12 + 6 * Math.abs(rand.gauss()));
+  }
+  for (const v of [0.6, 1.5, 3, 6, 10]) push((x += v), 0, v, 6); // pulling away
+  for (let i = 0; i < 25; i++) push((x += 15), 0, 15, 4);
+  const fixes = toLatLon(pts).map(({ lat, lon, t: time, speed, acc }) => ({ lat, lon, t: time, speed, acc }));
+  const a = analyzeCourse(fixes);
+  assert.equal(a.corners.length, 0, a.corners.map((c) => `${Math.round(c.angle)}° r${c.radius.toFixed(1)}`).join(', '));
+});
+
+// Pulling off the track to park and rejoining: a real few-metre jog at walking pace.
+test('pulling over for a rest and rejoining does not become corners', () => {
+  const rand = rng(13);
+  const pts = [];
+  let t = Date.UTC(2026, 9, 1, 9);
+  let x = 0;
+  let y = 0;
+  const push = (speed, acc = 5) => pts.push({ x: x + 0.8 * rand.gauss(), y: y + 0.8 * rand.gauss(), t: (t += 1000), speed, acc });
+  for (let i = 0; i < 25; i++) { x += 15; push(15); }
+  for (const v of [8, 4, 2]) { x += v; push(v); }
+  for (let i = 0; i < 6; i++) { x += 0.4; y -= 0.9; push(0.9); } // creep off to the right
+  for (let i = 0; i < 90; i++) push(0, 8); // parked
+  for (let i = 0; i < 6; i++) { x += 0.4; y += 0.9; push(0.9); } // creep back on
+  for (const v of [2, 4, 8]) { x += v; push(v); }
+  for (let i = 0; i < 25; i++) { x += 15; push(15); }
+  const fixes = toLatLon(pts).map(({ lat, lon, t: time, speed, acc }) => ({ lat, lon, t: time, speed, acc }));
+  const a = analyzeCourse(fixes);
+  assert.equal(a.corners.length, 0, a.corners.map((c) => `${c.dir} ${Math.round(c.angle)}° r${c.radius.toFixed(1)} driven ${c.drivenKmh?.toFixed(1)}`).join(', '));
+});
+
+test('corners tighter than a vehicle can turn, or crawled through, are dropped', () => {
+  assert.equal(isManoeuvre({ radius: 1, drivenKmh: 2 }), true, 'the rest-stop case: 1 m at 2 km/h');
+  assert.equal(isManoeuvre({ radius: 1.5, drivenKmh: null }), true, 'GPS noise even without speed data');
+  assert.equal(isManoeuvre({ radius: 5, drivenKmh: 3 }), true, 'turning round at walking pace');
+  assert.equal(isManoeuvre({ radius: 5, drivenKmh: 12 }), false, 'a real tight hairpin taken slowly');
+  assert.equal(isManoeuvre({ radius: 8, drivenKmh: 2 }), false, 'wider than a manoeuvre');
+  assert.equal(isManoeuvre({ radius: 4, drivenKmh: null }), false, 'tight but possible, no speed data');
 });

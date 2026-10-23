@@ -16,6 +16,13 @@ import {
   joinTracks,
   isManoeuvre,
   dropStrayEnds,
+  parseCornerCall,
+  compareWithCalls,
+  learnGradeRadii,
+  bestGrip,
+  gradeFor as gradeForOpts,
+  physicsGradeRadii,
+  compareTracks,
 } from '../js/analysis.js';
 import { buildPath, toLatLon, simulateGPS, speedProfile, rng } from '../tools/track-gen.js';
 
@@ -359,4 +366,87 @@ test('a course that passes its own start and carries on is not cut short', () =>
   const a = analyzeCourse(pts);
   assert.equal(a.trimmed, false);
   assert.ok(a.length > 1800, `length ${a.length}`);
+});
+
+test('corner calls are read from waypoint names in common formats', () => {
+  const cases = {
+    L3: ['L', 3], 'R 2': ['R', 2], 'Left 4 tightens': ['L', 4], '3R': ['R', 3], 'right-5': ['R', 5], 'l1hp': ['L', 1],
+    'L HP': ['L', 1], 'R2 LG T': ['R', 2], '376. Left 1 hairpin tightens': ['L', 1], 'K L 6': ['L', 6],
+  };
+  for (const [name, [dir, grade]] of Object.entries(cases)) {
+    const c = parseCornerCall(name);
+    assert.ok(c, `parsed ${name}`);
+    assert.deepEqual([c.dir, c.grade], [dir, grade], name);
+  }
+  for (const name of ['Jump', 'Caution', 'KL', 'Red hazard', 'WP 12', 'Start']) assert.equal(parseCornerCall(name), null, name);
+});
+
+test('grade limits are learned from hand-logged grades', () => {
+  const pairs = [[8, 1], [15, 1], [22, 2], [30, 2], [45, 3], [60, 3], [90, 4], [120, 4], [200, 5]].map(([radius, grade]) => ({ radius, grade }));
+  const { radii, agreement } = learnGradeRadii(pairs);
+  assert.equal(agreement, 1);
+  near(radii[0], Math.sqrt(15 * 22), 0.2, 'limit 1|2');
+  near(radii[3], Math.sqrt(120 * 200), 0.2, 'limit 4|5');
+  assert.equal(gradeForOpts({ radius: 50, angle: 40 }, { gradeRadii: radii }).grade, '3');
+  // A noisy log still gives increasing limits.
+  const noisy = learnGradeRadii([...pairs, { radius: 25, grade: 4 }, { radius: 100, grade: 2 }]);
+  assert.ok(noisy.radii.every((r, i) => i === 0 || r > noisy.radii[i - 1]));
+});
+
+test('the best grip setting is found from hand-logged grades', () => {
+  const opts = { surface: 'gravel', confidence: 0.6 };
+  const pairs = [10, 18, 25, 40, 55, 70, 110, 160].map((radius) => ({ radius, grade: Number(gradeForOpts({ radius, angle: 0 }, opts).grade) }));
+  const best = bestGrip(pairs, { surface: 'gravel', confidence: 0.8 });
+  assert.equal(best.agreement, 1);
+  assert.ok(Math.abs(best.confidence - 0.6) <= 0.06, `grip ${best.confidence}`);
+});
+
+test('truck calls are matched to app corners, with misses, extras and disagreements', () => {
+  const parts = [
+    { straight: 200 }, { radius: 15, angle: 90, dir: 'L' }, // app: 1
+    { straight: 200 }, { radius: 40, angle: 70, dir: 'R' }, // app: 2
+    { straight: 200 }, { radius: 90, angle: 50, dir: 'L' }, // app: 4
+    { straight: 300 },
+  ];
+  const a = analyzeCourse(track(parts));
+  assert.equal(a.corners.length, 3);
+  const at = (c) => ({ lat: c.lat, lon: c.lon });
+  const [c1, c2, c3] = a.corners;
+  const straightPoint = a.samples[Math.round(c3.endIdx + 150 / a.ds)];
+  const calls = [
+    { ...at(c1), dir: 'L', grade: Number(c1.grade), name: 'agrees' },
+    { ...at(c2), dir: 'R', grade: Number(c2.grade) + 1, name: 'truck says faster' },
+    { lat: straightPoint.lat, lon: straightPoint.lon, dir: 'R', grade: 5, name: 'not seen by the app' },
+  ];
+  const r = compareWithCalls(a, calls);
+  assert.equal(r.matches.length, 2);
+  assert.equal(r.exact, 1);
+  assert.equal(r.matches[1].gradeDiff, -1, 'app one grade slower than the truck');
+  assert.equal(r.missed.length, 1);
+  assert.equal(r.extra.length, 1);
+  assert.equal(r.extra[0], c3);
+});
+
+test('learning from a truck log brings the app in line with it', () => {
+  // The truck crew grade by radius with their own limits (10/20/40/80 m).
+  const truckGrade = (r) => 1 + [10, 20, 40, 80].filter((t) => r >= t).length;
+  const radii = [8, 14, 18, 26, 33, 45, 60, 75, 95, 130];
+  const parts = [{ straight: 200 }];
+  radii.forEach((radius, i) => parts.push({ radius, angle: 60, dir: i % 2 ? 'R' : 'L' }, { straight: 200 }));
+  const a = analyzeCourse(track(parts));
+  const calls = a.corners.map((c, i) => ({ lat: c.lat, lon: c.lon, dir: c.dir, grade: truckGrade(radii[i]) }));
+  const before = compareWithCalls(a, calls);
+  const { radii: learned } = learnGradeRadii(before.matches.map((m) => ({ radius: m.corner.radius, grade: m.call.grade })));
+  const after = compareWithCalls(analyzeCourse(track(parts), { gradeRadii: learned }), calls);
+  assert.ok(after.exact > before.exact, `exact ${before.exact} -> ${after.exact}`);
+  assert.ok(after.exact >= 9, `after learning ${after.exact}/10 agree`);
+});
+
+test('two recordings of the same course are compared corner by corner', () => {
+  const a = analyzeCourse(track(rectangle));
+  const b = analyzeCourse(track(rectangle), { smoothing: 8 });
+  const r = compareTracks(a, b);
+  assert.equal(r.pairs.length, 4);
+  assert.ok(r.medianRatio > 0.7 && r.medianRatio < 1.3);
+  assert.ok(physicsGradeRadii().every((v, i, arr) => i === 0 || v > arr[i - 1]));
 });

@@ -182,6 +182,21 @@ ${pts}
 `;
 }
 
+// Named points (waypoints) in a GPX or KML file, e.g. corner calls saved in a truck's nav unit.
+export function parseWaypoints(text) {
+  const out = [];
+  for (const m of text.matchAll(/<wpt\b([^>]*)>([\s\S]*?)<\/wpt>/gi)) {
+    out.push({ lat: num(attr(m[1], 'lat')), lon: num(attr(m[1], 'lon')), name: child(m[2], 'name') ?? '', type: child(m[2], 'type') ?? '' });
+  }
+  for (const m of text.matchAll(/<Placemark\b[^>]*>([\s\S]*?)<\/Placemark>/gi)) {
+    const point = m[1].match(/<Point\b[^>]*>[\s\S]*?<coordinates>([^<]+)<\/coordinates>/i);
+    if (!point) continue;
+    const [lon, lat] = point[1].trim().split(',').map(Number);
+    out.push({ lat, lon, name: (child(m[1], 'name') ?? '').replace(/<!\[CDATA\[|\]\]>/g, ''), type: '' });
+  }
+  return out.filter((w) => Number.isFinite(w.lat) && Number.isFinite(w.lon));
+}
+
 // Hazards saved by toGPX (waypoints typed hazard-green / hazard-orange / hazard-red).
 export function parseGPXHazards(text) {
   const out = [];

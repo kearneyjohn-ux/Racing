@@ -227,6 +227,32 @@ button, input, select { font: inherit; color: inherit; }
 }
 .recentre-btn[hidden] { display: none; }
 
+/* Compare tab */
+.cmp-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 12px; }
+.cmp-summary div { background: var(--card); border-radius: 10px; padding: 8px 10px; }
+.cmp-summary small { display: block; color: var(--muted); font-size: 12px; }
+.cmp-summary b { font-size: 18px; }
+.cmp-note { background: #2b2410; color: #fee08b; border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; font-size: 13px; }
+.rec { background: var(--card); border-left: 4px solid var(--go); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.rec h3 { margin: 0 0 4px; font-size: 15px; }
+.rec p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.rec .gain { color: #8fd18f; font-weight: 700; }
+.rec .btn { min-height: 36px; }
+.rec.applied { border-left-color: var(--accent); opacity: .75; }
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
+.cmp-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px; }
+.cmp-table td { padding: 6px 4px; border-top: 1px solid var(--line); }
+.cmp-table tr[data-lat] { cursor: pointer; }
+.cmp-table tr[data-lat]:hover td { background: var(--card); }
+.diff-up { color: #91cf60; font-weight: 700; }
+.diff-down { color: #fc8d59; font-weight: 700; }
+.call-marker { padding: 2px 6px; border-radius: 6px; background: #111; color: #fff; font: 700 11px/1.2 system-ui, sans-serif; border: 2px solid #fff; white-space: nowrap; }
+.call-marker.same { border-color: #22c55e; }
+.call-marker.diff { border-color: #fdae61; }
+.call-marker.missed { border-color: #ef4444; }
+.grade-source { display: grid; gap: 6px; border-left: 4px solid var(--accent); }
+.grade-source small { color: var(--muted); }
+
 /* Map markers */
 .hazard-marker { filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000) drop-shadow(0 1px 3px rgba(0, 0, 0, .6)); }
 .hazard-marker div {

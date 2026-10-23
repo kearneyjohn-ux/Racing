@@ -44,6 +44,7 @@ export const DEFAULTS = {
   spacing: 1, // resample spacing in metres
   maxAccuracy: 30, // drop GPS fixes reporting worse accuracy than this (metres)
   overrides: [],
+  gradeRadii: null, // [r1, r2, r3, r4]: radius limits (m) for grades 1-4 learned from a truck log
 };
 
 // ---------------------------------------------------------------------------
@@ -80,8 +81,20 @@ export function cornerSpeedKmh(radius, opts = DEFAULTS) {
 export function gradeFor({ radius, angle }, opts = DEFAULTS) {
   const o = { ...DEFAULTS, ...opts };
   const speedKmh = Math.min(cornerSpeedKmh(radius, o), o.topSpeedKmh);
+  const hairpin = angle >= o.hairpinAngle && radius <= o.hairpinRadius;
+  if (validRadii(o.gradeRadii)) return { grade: gradeFromRadii(radius, o.gradeRadii), speedKmh, hairpin };
   const g = GRADES.find((gr) => speedKmh < gr.maxKmh);
-  return { grade: g.id, speedKmh, hairpin: angle >= o.hairpinAngle && radius <= o.hairpinRadius };
+  return { grade: g.id, speedKmh, hairpin };
+}
+
+const validRadii = (r) => Array.isArray(r) && r.length === 4 && r.every((v, i) => Number.isFinite(v) && v > 0 && (i === 0 || v > r[i - 1]));
+const gradeFromRadii = (radius, radii) => String(1 + radii.filter((t) => radius >= t).length);
+
+// The radius at which the speed-based grades change, for the current surface and grip.
+export function physicsGradeRadii(opts = DEFAULTS) {
+  const o = { ...DEFAULTS, ...opts };
+  const mu = (SURFACES[o.surface]?.mu ?? SURFACES.gravel.mu) * o.confidence;
+  return GRADES.slice(0, 4).map((g) => (g.maxKmh / 3.6) ** 2 / (mu * G));
 }
 
 // ---------------------------------------------------------------------------
@@ -855,4 +868,151 @@ export function joinTracks(a, b, { spacing = 5, maxAccuracy = DEFAULTS.maxAccura
     filled.push({ lat, lon, t: NaN, acc: NaN, speed: NaN, filled: true });
   }
   return { points: [...ga, ...filled, ...gb], gap, overlapTrimmed: false };
+}
+
+// ---------------------------------------------------------------------------
+// Comparing with corner calls logged by hand (e.g. waypoints saved in a truck's nav unit).
+
+// "L3", "R 2", "Left 4 tightens", "3R", "right-5", "L HP" → { dir, grade, hairpin }, or null.
+export function parseCornerCall(name) {
+  const s = String(name ?? '').toLowerCase();
+  const dirOf = (w) => (w[0] === 'l' ? 'L' : 'R');
+  let m = s.match(/(?<![a-z0-9])(left|right|l|r)\s*[-_.]?\s*([1-6])(?![0-9])/);
+  if (m) return { dir: dirOf(m[1]), grade: Number(m[2]), hairpin: /hairpin|(?<![a-z])hp(?![a-z])/.test(s) };
+  m = s.match(/(?<![a-z0-9])(left|right|l|r)\s*[-_.]?\s*(hairpin|hp|h)(?![a-z])/);
+  if (m) return { dir: dirOf(m[1]), grade: 1, hairpin: true };
+  m = s.match(/(?<![a-z0-9.])([1-6])\s*[-_]?\s*(left|right|l|r)(?![a-z])/);
+  if (m) return { dir: dirOf(m[2]), grade: Number(m[1]), hairpin: /hairpin|(?<![a-z])hp(?![a-z])/.test(s) };
+  return null;
+}
+
+// Match hand-logged calls ({lat, lon, dir, grade, name}) to the app's corners along the course.
+export function compareWithCalls(analysis, calls, { maxOffset = 80, slack = 50 } = {}) {
+  const { corners, closed, ds, samples } = analysis;
+  const n = samples.length;
+  const along = (a, b) => (closed ? Math.min(mod(b - a, n), mod(a - b, n)) : Math.abs(b - a)) * ds;
+  const placed = [];
+  const offCourse = [];
+  for (const call of calls) {
+    const loc = locate(analysis, call.lat, call.lon);
+    if (loc.offset > maxOffset) offCourse.push(call);
+    else placed.push({ ...call, index: loc.index, s: loc.s });
+  }
+  const pairs = [];
+  placed.forEach((call, ci) => {
+    corners.forEach((c, k) => {
+      const d = along(call.index, c.apexIdx);
+      if (d <= c.length / 2 + slack) pairs.push({ ci, k, d });
+    });
+  });
+  pairs.sort((a, b) => a.d - b.d);
+  const usedCall = new Set();
+  const usedCorner = new Set();
+  const matches = [];
+  for (const p of pairs) {
+    if (usedCall.has(p.ci) || usedCorner.has(p.k)) continue;
+    usedCall.add(p.ci);
+    usedCorner.add(p.k);
+    const call = placed[p.ci];
+    const corner = corners[p.k];
+    matches.push({ call, corner, gradeDiff: Number(corner.grade) - Math.min(5, call.grade), dirMatch: corner.dir === call.dir });
+  }
+  matches.sort((a, b) => a.corner.startS - b.corner.startS);
+  const missed = placed.filter((_, ci) => !usedCall.has(ci)).sort((a, b) => a.s - b.s);
+  const extra = corners.filter((_, k) => !usedCorner.has(k));
+  const graded = matches.filter((m) => m.dirMatch);
+  const exact = graded.filter((m) => m.gradeDiff === 0).length;
+  const within1 = graded.filter((m) => Math.abs(m.gradeDiff) <= 1).length;
+  const meanDiff = graded.length ? graded.reduce((t, m) => t + m.gradeDiff, 0) / graded.length : 0;
+  return { matches, missed, extra, offCourse, exact, within1, graded: graded.length, meanDiff };
+}
+
+// Learn radius limits for grades 1-5 from (radius, grade) pairs: the monotone assignment (bigger
+// radius never gets a lower grade) that agrees with the most hand-logged grades.
+export function learnGradeRadii(pairs, fallback = physicsGradeRadii()) {
+  const data = pairs.filter((p) => Number.isFinite(p.radius) && p.grade >= 1).map((p) => ({ r: p.radius, g: Math.min(5, Math.round(p.grade)) }));
+  data.sort((a, b) => a.r - b.r);
+  const n = data.length;
+  if (!n) return { radii: fallback.slice(), agreement: 0 };
+  // dp[i][k]: best matches for the first i+1 items with item i graded k (grades never decrease).
+  const dp = Array.from({ length: n }, () => new Array(6).fill(-Infinity));
+  const from = Array.from({ length: n }, () => new Array(6).fill(0));
+  for (let k = 1; k <= 5; k++) dp[0][k] = data[0].g === k ? 1 : 0;
+  for (let i = 1; i < n; i++) {
+    let best = -Infinity;
+    let bestK = 1;
+    for (let k = 1; k <= 5; k++) {
+      if (dp[i - 1][k] > best) {
+        best = dp[i - 1][k];
+        bestK = k;
+      }
+      dp[i][k] = best + (data[i].g === k ? 1 : 0);
+      from[i][k] = bestK;
+    }
+  }
+  let k = 1;
+  for (let j = 2; j <= 5; j++) if (dp[n - 1][j] > dp[n - 1][k]) k = j;
+  const matched = dp[n - 1][k];
+  const assigned = new Array(n);
+  for (let i = n - 1; i >= 0; i--) {
+    assigned[i] = k;
+    k = from[i][k];
+  }
+  const radii = [];
+  for (let b = 1; b <= 4; b++) {
+    const lo = data.filter((_, i) => assigned[i] <= b).at(-1);
+    const hi = data.find((_, i) => assigned[i] > b);
+    radii.push(lo && hi ? Math.sqrt(lo.r * hi.r) : fallback[b - 1]);
+  }
+  for (let b = 1; b < 4; b++) radii[b] = Math.max(radii[b], radii[b - 1] * 1.05);
+  return { radii: radii.map((r) => Math.round(r * 10) / 10), agreement: matched / n };
+}
+
+// The grip % (with the current surface) whose speed-based grades best agree with the hand-logged ones.
+export function bestGrip(pairs, opts = DEFAULTS) {
+  const o = { ...DEFAULTS, ...opts, gradeRadii: null };
+  const scored = [];
+  for (let step = 30; step <= 100; step++) {
+    const c = step / 100;
+    let hits = 0;
+    let err = 0;
+    for (const p of pairs) {
+      const g = Number(gradeFor({ radius: p.radius, angle: 0 }, { ...o, confidence: c }).grade);
+      if (g === Math.min(5, p.grade)) hits++;
+      err += Math.abs(g - Math.min(5, p.grade));
+    }
+    scored.push({ confidence: c, hits, err });
+  }
+  // Several settings often score the same; take the middle of the best run so it isn't on a knife edge.
+  const top = scored.reduce((b, x) => (x.hits > b.hits || (x.hits === b.hits && x.err < b.err) ? x : b));
+  const ties = scored.filter((x) => x.hits === top.hits && x.err === top.err);
+  const pick = ties[Math.floor(ties.length / 2)];
+  const n = Math.max(1, pairs.length);
+  return { confidence: pick.confidence, agreement: pick.hits / n, mae: pick.err / n };
+}
+
+// Corner shapes of two recordings of the same course (e.g. phone vs a truck's GPS), matched by apex.
+export function compareTracks(analysis, other, { maxApart = 40 } = {}) {
+  const pairs = [];
+  const used = new Set();
+  for (const c of analysis.corners) {
+    let best = null;
+    let bestD = maxApart;
+    other.corners.forEach((d, k) => {
+      if (used.has(k) || d.dir !== c.dir) return;
+      const dist = haversine(c, d);
+      if (dist < bestD) {
+        bestD = dist;
+        best = k;
+      }
+    });
+    if (best !== null) {
+      used.add(best);
+      pairs.push({ corner: c, ref: other.corners[best] });
+    }
+  }
+  const ratios = pairs.map((p) => Math.log(p.corner.radius / p.ref.radius)).sort((a, b) => a - b);
+  const medianRatio = ratios.length ? Math.exp(ratios[Math.floor(ratios.length / 2)]) : 1;
+  const sameGrade = pairs.filter((p) => p.corner.grade === p.ref.grade).length;
+  return { pairs, medianRatio, sameGrade, onlyApp: analysis.corners.length - pairs.length, onlyRef: other.corners.length - pairs.length };
 }

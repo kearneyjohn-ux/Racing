@@ -36,6 +36,23 @@ It runs in the phone's browser, so there's nothing to install. You can add it to
 4. **Drive with pace notes.** A big colour card shows the next corner, its distance and target speed, plus the corner after it. Notes are read aloud a few seconds before each corner ("left 3 tightens, into right 4"). The target turns red if you're coming in too fast. **Replay lap** plays your recorded lap through drive mode so you can try it from the sofa.
 5. **Export**: **GPX** (the track plus every corner and hazard as named waypoints, e.g. "Left 2 tightens", with no numbering; opens in Garmin, OsmAnd, Gaia GPS, Google Earth, and re-imports here with its hazards), KML (colour-coded for Google Earth / My Maps), GeoJSON, or pace notes CSV. Every saved course also has a **GPX** button in the course list. On phones that support it, exports open the share sheet (Save to Files, AirDrop, WhatsApp).
 
+## Compare with a truck log
+
+The **Compare** tab checks the app's corner grades against a GPX logged in the truck.
+
+- **With corner calls**: save each corner as a waypoint named like `L3`, `R 2`, `Left 4` or `3R` (other waypoints are ignored). The calls are taken as correct. The app matches them to its corners and shows:
+  - how many it agrees with (same grade, within one grade, and whether it rates faster or slower on average)
+  - every disagreement and every truck corner it didn't find, tappable on the map
+  - **recommended changes**, each showing the improvement it would make, applied with one tap:
+    - **Learned grade limits**: corner radius limits fitted to your calls (shown in Settings, with a button to go back to speed-based grades)
+    - **Grip %**: keeps speed-based grading, scaled to match how you grade
+    - **Straight above radius / Ignore bends under**: if the app misses your corners or adds ones you didn't call
+
+  If your log uses 1 for the fastest corners it's detected and flipped. Grade 6 is compared as a 5.
+- **Plain track (no waypoints)**: both recordings are analysed the same way and their corner shapes compared, with a recommended GPS smoothing setting.
+
+Nothing changes until you tap **Apply**; the comparison then re-runs with the new setting.
+
 ## Settings
 
 - **Surface** sets the grip used for target speeds: tarmac 0.85, hard-packed dirt 0.65, loose gravel 0.55, dry grass 0.45, sand 0.4, wet grass/mud 0.3, snow 0.22.

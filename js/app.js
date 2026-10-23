@@ -11,6 +11,12 @@ import {
   hazardsAhead,
   locate,
   joinTracks,
+  compareWithCalls,
+  compareTracks,
+  learnGradeRadii,
+  bestGrip,
+  parseCornerCall,
+  physicsGradeRadii,
   noteText,
   placeHazards,
   positionAtTime,
@@ -18,7 +24,7 @@ import {
   spokenNote,
   SURFACES,
 } from './analysis.js';
-import { parseGPXHazards, parseTrackFile, toGeoJSON, toGPX, toKML, toPaceNotesCSV } from './formats.js';
+import { parseGPXHazards, parseTrackFile, parseWaypoints, toGeoJSON, toGPX, toKML, toPaceNotesCSV } from './formats.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -82,6 +88,7 @@ const APP_DEFAULTS = {
   voice: true,
   voiceChoice: 'default',
   gpxNames: 'full',
+  gradeRadii: null,
   cornerSort: 'track',
   leadSeconds: 5,
   callMode: 'distance',
@@ -373,6 +380,7 @@ function analysisOptions(course) {
     courseType: s.courseType,
     reverse: s.reverse,
     overrides: course.overrides?.[overrideKey()] ?? [],
+    gradeRadii: s.gradeRadii ?? null,
   };
 }
 
@@ -474,6 +482,7 @@ $('joinBtn').addEventListener('click', () => {
 
 function renderCourseList() {
   renderJoinCard();
+  renderCompareCourses();
   const ul = $('courseList');
   if (!state.courses.length) {
     ul.innerHTML = '<li class="muted">Nothing saved yet.</li>';
@@ -521,6 +530,14 @@ $('courseList').addEventListener('click', (e) => {
 // Corners tab
 
 function gradeRange(g, i) {
+  const radii = state.settings.gradeRadii;
+  if (radii) {
+    // Learned from a truck log: grades are set by radius.
+    const r = (v) => `${Math.round(v)} m`;
+    if (i === 0) return `< ${r(radii[0])}`;
+    if (i === 4) return `${r(radii[3])}+`;
+    return `${r(radii[i - 1])}–${r(radii[i])}`;
+  }
   const lo = GRADES[i - 1]?.maxKmh;
   const u = (v) => Math.round(toUnit(v));
   if (!lo) return `< ${u(g.maxKmh)}`;
@@ -631,6 +648,281 @@ document.querySelectorAll('[data-export]').forEach((btn) =>
 );
 
 // ---------------------------------------------------------------------------
+// Compare with a truck log: corner calls saved as waypoints are taken as correct, the app's
+// corners are matched to them, and settings that would make the app agree are recommended.
+
+const cmp = { name: '', calls: [], points: null, layer: L.layerGroup().addTo(map), running: false };
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const pct = (x) => `${Math.round(x * 100)}%`;
+const km = (m) => `${(m / 1000).toFixed(2)} km`;
+
+function renderCompareCourses() {
+  const sel = $('cmpCourse');
+  const keep = sel.value || state.course?.id;
+  sel.innerHTML = state.courses.length
+    ? state.courses.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')
+    : '<option value="">No saved courses yet</option>';
+  if (state.courses.some((c) => c.id === keep)) sel.value = keep;
+  updateCompareButton();
+}
+
+function updateCompareButton() {
+  $('cmpRun').disabled = cmp.running || !$('cmpCourse').value || (cmp.calls.length < 3 && !cmp.points);
+}
+
+$('cmpCourse').addEventListener('change', updateCompareButton);
+
+$('cmpFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const text = await file.text();
+  const waypoints = parseWaypoints(text);
+  cmp.name = file.name;
+  cmp.calls = waypoints
+    .map((w) => ({ ...w, ...parseCornerCall(w.name) }))
+    // Skip our own hazard waypoints if the file came from this app.
+    .filter((w) => w.dir && !/^hazard-/.test(w.type));
+  try {
+    cmp.points = parseTrackFile(text, file.name);
+  } catch {
+    cmp.points = null;
+  }
+  const other = waypoints.length - cmp.calls.length;
+  $('cmpFileInfo').textContent =
+    `${file.name}: ${cmp.calls.length} corner calls` +
+    (other ? `, ${other} other waypoints ignored` : '') +
+    (cmp.points ? `, track of ${cmp.points.length} points` : ', no track') +
+    (cmp.calls.length < 3 ? (cmp.points ? '. No corner calls, so the corner shapes will be compared.' : '. Nothing to compare: no corner calls or track found.') : '.');
+  updateCompareButton();
+});
+
+$('cmpRun').addEventListener('click', () => runCompare());
+
+async function runCompare() {
+  const course = state.courses.find((c) => c.id === $('cmpCourse').value);
+  if (!course || cmp.running) return;
+  cmp.running = true;
+  updateCompareButton();
+  const out = $('cmpOut');
+  const progress = (msg) => (out.innerHTML = `<div class="card muted">${esc(msg)}</div>`);
+  progress('Comparing…');
+  await tick();
+  try {
+    if (course !== state.course) selectCourse(course, true);
+    const pts = unpack(course.points);
+    const opts = analysisOptions(course);
+    if (cmp.calls.length >= 3) await compareCalls(course, pts, opts, progress);
+    else await compareShapes(course, pts, opts, progress);
+    out.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  } catch (err) {
+    out.innerHTML = `<div class="card">Couldn't compare: ${esc(err.message)}</div>`;
+  }
+  cmp.running = false;
+  updateCompareButton();
+}
+
+// Hand-logged scales sometimes run the other way (1 = fastest). If the truck's low grades sit on
+// big radii and its high grades on tight ones, flip them.
+function looksReversed(matches) {
+  const m = matches.filter((x) => x.dirMatch);
+  const slow = m.filter((x) => x.call.grade <= 2).map((x) => x.corner.radius);
+  const fast = m.filter((x) => x.call.grade >= 4).map((x) => x.corner.radius);
+  if (slow.length < 3 || fast.length < 3) return false;
+  const med = (a) => [...a].sort((p, q) => p - q)[Math.floor(a.length / 2)];
+  return med(slow) > med(fast) * 1.3;
+}
+
+async function compareCalls(course, pts, opts, progress) {
+  const notes = [];
+  let calls = cmp.calls.map((c) => ({ ...c }));
+  const base = analyzeCourse(pts, opts);
+  let r = compareWithCalls(base, calls);
+  if (looksReversed(r.matches)) {
+    const top = Math.max(...calls.map((c) => c.grade));
+    calls = calls.map((c) => ({ ...c, grade: top + 1 - c.grade }));
+    r = compareWithCalls(base, calls);
+    notes.push(`Your log looks like it uses 1 for the fastest corners, so its grades were flipped (1 ↔ ${top}) to compare.`);
+  }
+  if (calls.some((c) => c.grade === 6)) notes.push("Your log uses grade 6; it's compared as a 5, the app's fastest grade.");
+  if (r.offCourse.length) notes.push(`${r.offCourse.length} truck call${r.offCourse.length > 1 ? 's are' : ' is'} more than 80 m from this course and ${r.offCourse.length > 1 ? 'were' : 'was'} skipped. Check you picked the right course.`);
+
+  const pairs = r.matches.filter((m) => m.dirMatch).map((m) => ({ radius: m.corner.radius, grade: Math.min(5, m.call.grade) }));
+  const now = r.graded ? r.exact / r.graded : 0;
+  const recs = [];
+  if (pairs.length >= 5) {
+    const learned = learnGradeRadii(pairs, physicsGradeRadii({ ...opts, gradeRadii: null }));
+    const grip = bestGrip(pairs, opts);
+    const radiiText = learned.radii.map((v, i) => `${i + 1}|${i + 2} at ${Math.round(v)} m`).join(', ');
+    if (learned.agreement > now + 0.04) {
+      recs.push({
+        title: 'Use grade limits learned from your truck log',
+        detail: `Grades come from corner radius using limits fitted to your calls: ${radiiText}.`,
+        from: now,
+        to: learned.agreement,
+        apply: () => (state.settings.gradeRadii = learned.radii),
+      });
+    }
+    if (grip.agreement > now + 0.04 && Math.abs(grip.confidence - Number(opts.confidence)) >= 0.03) {
+      recs.push({
+        title: `Set "Grip you'll use" to ${pct(grip.confidence)} (now ${pct(opts.confidence)})`,
+        detail: `Keeps speed-based grades, with target speeds scaled to match how you graded.${grip.agreement < learned.agreement - 0.01 ? ' Simpler than learned limits, but not as close a fit.' : ' Fits as well as learned limits here, and also adjusts the target speeds.'}`,
+        from: now,
+        to: grip.agreement,
+        apply: () => {
+          state.settings.confidence = grip.confidence;
+          state.settings.gradeRadii = null;
+        },
+      });
+    }
+  }
+
+  // Does the app find the same corners? Try gentler/stricter detection and keep what helps.
+  const score = (x) => x.matches.length - 0.5 * x.extra.length;
+  const tryValues = async (key, values, label) => {
+    let best = { value: opts[key], r };
+    for (const v of values) {
+      if (v === opts[key]) continue;
+      progress(`Checking ${label} ${v}…`);
+      await tick();
+      const rv = compareWithCalls(analyzeCourse(pts, { ...opts, [key]: v }), calls);
+      if (score(rv) > score(best.r) + 1.5) best = { value: v, r: rv };
+    }
+    return best;
+  };
+  const sr = await tryValues('straightRadius', [100, 200, 250, 300, 400], 'straight radius');
+  if (sr.value !== opts.straightRadius) {
+    recs.push({
+      title: `Set "Straight above radius" to ${sr.value} m (now ${opts.straightRadius} m)`,
+      detail: `Matches ${sr.r.matches.length} of your corners instead of ${r.matches.length}, with ${sr.r.extra.length} app-only corners instead of ${r.extra.length}.`,
+      apply: () => (state.settings.straightRadius = sr.value),
+    });
+  }
+  const ma = await tryValues('minAngle', [10, 20, 25, 30], 'smallest corner angle');
+  if (ma.value !== opts.minAngle) {
+    recs.push({
+      title: `Set "Ignore bends under" to ${ma.value}° (now ${opts.minAngle}°)`,
+      detail: `Matches ${ma.r.matches.length} of your corners instead of ${r.matches.length}, with ${ma.r.extra.length} app-only corners instead of ${r.extra.length}.`,
+      apply: () => (state.settings.minAngle = ma.value),
+    });
+  }
+  renderCallResults(course, r, now, recs, notes);
+}
+
+async function compareShapes(course, pts, opts, progress) {
+  progress('Analysing the truck track…');
+  await tick();
+  const truck = analyzeCourse(cmp.points, { ...opts, smoothing: 3, overrides: [] });
+  const results = [];
+  for (const smoothing of [3, 5, 8]) {
+    progress(`Trying GPS smoothing ${smoothing} m…`);
+    await tick();
+    const res = compareTracks(analyzeCourse(pts, { ...opts, smoothing }), truck);
+    const unmatched = (res.onlyApp + res.onlyRef) / Math.max(1, res.pairs.length * 2 + res.onlyApp + res.onlyRef);
+    results.push({ smoothing, res, score: Math.abs(Math.log(res.medianRatio)) + unmatched });
+  }
+  const current = results.find((x) => x.smoothing === Number(opts.smoothing)) ?? results[1];
+  const best = results.reduce((b, x) => (x.score < b.score ? x : b));
+  const recs = [];
+  if (best.smoothing !== current.smoothing && best.score < current.score - 0.05) {
+    recs.push({
+      title: `Set "GPS smoothing" to ${{ 3: 'Light', 5: 'Normal', 8: 'Heavy' }[best.smoothing]} (${best.smoothing} m)`,
+      detail: `App corner radii would be ${pct(best.res.medianRatio)} of the truck's instead of ${pct(current.res.medianRatio)}, with ${best.res.pairs.length} corners in common instead of ${current.res.pairs.length}.`,
+      apply: () => (state.settings.smoothing = best.smoothing),
+    });
+  }
+  renderShapeResults(current.res, truck, recs);
+}
+
+function recHtml(recs) {
+  if (!recs.length) return '<div class="card muted">No changes recommended: the current settings are already the closest match.</div>';
+  return `<h2 class="section-title">Recommended changes</h2>${recs
+    .map(
+      (rec, i) => `<div class="rec" data-rec="${i}"><h3>${esc(rec.title)}</h3><p>${esc(rec.detail)}${rec.to !== undefined ? ` <span class="gain">Same grade: ${pct(rec.from)} → ${pct(rec.to)}</span>` : ''}</p><button type="button" class="btn btn-go" data-apply="${i}">Apply</button></div>`,
+    )
+    .join('')}`;
+}
+
+function wireRecs(recs) {
+  $('cmpOut').querySelectorAll('[data-apply]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      recs[Number(btn.dataset.apply)].apply();
+      saveSettings();
+      syncSettingsForm();
+      analyse();
+      toast('Applied. Comparing again with the new setting…');
+      runCompare();
+    }),
+  );
+  $('cmpOut').querySelectorAll('tr[data-lat]').forEach((tr) =>
+    tr.addEventListener('click', () => map.flyTo([Number(tr.dataset.lat), Number(tr.dataset.lon)], Math.max(map.getZoom(), 17), { duration: 0.6 })),
+  );
+  $('cmpClear')?.addEventListener('click', () => {
+    cmp.layer.clearLayers();
+    $('cmpOut').innerHTML = '';
+  });
+}
+
+const callLabel = (c) => `${c.dir}${c.grade}`;
+
+function renderCallResults(course, r, now, recs, notes) {
+  cmp.layer.clearLayers();
+  if (cmp.points) L.polyline(cmp.points.map((p) => [p.lat, p.lon]), { color: '#3fa7ff', weight: 2, dashArray: '6 6', opacity: 0.8, interactive: false }).addTo(cmp.layer);
+  const mark = (call, cls, title) =>
+    L.marker([call.lat, call.lon], { icon: L.divIcon({ className: '', html: `<div class="call-marker ${cls}">${esc(callLabel(call))}</div>`, iconSize: null, iconAnchor: [14, -8] }), title, zIndexOffset: 300 }).addTo(cmp.layer);
+  for (const m of r.matches) mark(m.call, m.dirMatch && m.gradeDiff === 0 ? 'same' : 'diff', `Truck: ${m.call.name}`);
+  for (const c of r.missed) mark(c, 'missed', `Truck: ${c.name} (app found no corner)`);
+
+  const disagree = r.matches.filter((m) => !m.dirMatch || m.gradeDiff !== 0);
+  const diffText = (m) => (!m.dirMatch ? '<span class="diff-down">direction</span>' : m.gradeDiff > 0 ? `<span class="diff-up">app +${m.gradeDiff} faster</span>` : `<span class="diff-down">app ${m.gradeDiff} slower</span>`);
+  const bias = r.meanDiff;
+  const rows = disagree
+    .map((m) => `<tr data-lat="${m.corner.lat}" data-lon="${m.corner.lon}"><td>${km(m.corner.startS)}</td><td>${esc(callLabel(m.call))}</td><td>${esc(shortLabel(m.corner))}</td><td>${Math.round(m.corner.radius)} m</td><td>${diffText(m)}</td></tr>`)
+    .join('');
+  const missedRows = r.missed
+    .map((c) => `<tr data-lat="${c.lat}" data-lon="${c.lon}"><td>${km(c.s)}</td><td>${esc(callLabel(c))}</td><td colspan="3" class="muted">no app corner here</td></tr>`)
+    .join('');
+  $('cmpOut').innerHTML = `
+    <div class="cmp-summary">
+      <div><small>Truck calls matched</small><b>${r.matches.length} / ${r.matches.length + r.missed.length}</b></div>
+      <div><small>Same grade</small><b>${pct(now)}</b></div>
+      <div><small>Within one grade</small><b>${pct(r.graded ? r.within1 / r.graded : 0)}</b></div>
+      <div><small>App on average</small><b>${Math.abs(bias) < 0.15 ? 'spot on' : `${bias > 0 ? '+' : ''}${bias.toFixed(1)} ${bias > 0 ? 'faster' : 'slower'}`}</b></div>
+    </div>
+    ${notes.map((n) => `<div class="cmp-note">${esc(n)}</div>`).join('')}
+    ${recHtml(recs)}
+    <h2 class="section-title">Where the app disagrees (${disagree.length})</h2>
+    ${disagree.length ? `<table class="cmp-table"><tr><th>At</th><th>Truck</th><th>App</th><th>Radius</th><th></th></tr>${rows}</table>` : '<p class="muted">Every matched corner has the same grade and direction.</p>'}
+    <h2 class="section-title">Truck corners the app didn't find (${r.missed.length})</h2>
+    ${r.missed.length ? `<table class="cmp-table">${missedRows}</table>` : '<p class="muted">None.</p>'}
+    <p class="muted small">${r.extra.length} app corners have no truck call nearby. On the map, truck calls are outlined green (same), amber (different) or red (not found by the app). Tap a row to go to it.</p>
+    <button type="button" class="btn btn-ghost" id="cmpClear">Clear comparison</button>`;
+  wireRecs(recs);
+}
+
+function renderShapeResults(res, truck, recs) {
+  cmp.layer.clearLayers();
+  L.polyline(truck.samples.map((p) => [p.lat, p.lon]), { color: '#3fa7ff', weight: 3, dashArray: '6 6', opacity: 0.9, interactive: false }).addTo(cmp.layer);
+  const rows = res.pairs
+    .filter((p) => p.corner.grade !== p.ref.grade)
+    .map((p) => `<tr data-lat="${p.corner.lat}" data-lon="${p.corner.lon}"><td>${km(p.corner.startS)}</td><td>${esc(shortLabel(p.ref))} · ${Math.round(p.ref.radius)} m</td><td>${esc(shortLabel(p.corner))} · ${Math.round(p.corner.radius)} m</td></tr>`)
+    .join('');
+  $('cmpOut').innerHTML = `
+    <div class="cmp-note">The truck file has no corner calls, so both recordings were analysed the same way and their corner shapes compared. To check grades against your own calls, save each corner as a waypoint named like "L3".</div>
+    <div class="cmp-summary">
+      <div><small>Corners in both</small><b>${res.pairs.length}</b></div>
+      <div><small>Same grade</small><b>${pct(res.pairs.length ? res.sameGrade / res.pairs.length : 0)}</b></div>
+      <div><small>App radius vs truck</small><b>${pct(res.medianRatio)}</b></div>
+      <div><small>Only in app / truck</small><b>${res.onlyApp} / ${res.onlyRef}</b></div>
+    </div>
+    ${recHtml(recs)}
+    <h2 class="section-title">Different grades</h2>
+    ${rows ? `<table class="cmp-table"><tr><th>At</th><th>Truck track</th><th>App</th></tr>${rows}</table>` : '<p class="muted">All shared corners have the same grade.</p>'}
+    <button type="button" class="btn btn-ghost" id="cmpClear">Clear comparison</button>`;
+  wireRecs(recs);
+}
+
+// ---------------------------------------------------------------------------
 // Tabs and panel
 
 function showTab(name) {
@@ -660,13 +952,7 @@ function initSettings() {
   $('surfaceSelect').innerHTML = Object.entries(SURFACES)
     .map(([id, s]) => `<option value="${id}">${s.label} (grip ${s.mu})</option>`)
     .join('');
-  for (const el of form.elements) {
-    if (!el.name) continue;
-    if (el.type === 'checkbox') el.checked = !!state.settings[el.name];
-    else el.value = state.settings[el.name];
-  }
-  $('confOut').textContent = `${Math.round(state.settings.confidence * 100)}%`;
-  showCallRows();
+  syncSettingsForm();
   form.addEventListener('input', (e) => {
     const el = e.target;
     if (!el.name) return;
@@ -691,6 +977,30 @@ function initSettings() {
     }
   });
 }
+
+// Put the current settings into the form (also after a recommendation is applied).
+function syncSettingsForm() {
+  for (const el of $('settingsForm').elements) {
+    if (!el.name) continue;
+    if (el.type === 'checkbox') el.checked = !!state.settings[el.name];
+    else el.value = state.settings[el.name];
+  }
+  $('confOut').textContent = `${Math.round(state.settings.confidence * 100)}%`;
+  showCallRows();
+  const radii = state.settings.gradeRadii;
+  $('gradeSource').hidden = !radii;
+  if (radii) {
+    $('gradeSourceText').textContent = `1: under ${Math.round(radii[0])} m · 2: ${Math.round(radii[0])}–${Math.round(radii[1])} m · 3: ${Math.round(radii[1])}–${Math.round(radii[2])} m · 4: ${Math.round(radii[2])}–${Math.round(radii[3])} m · 5: over ${Math.round(radii[3])} m. Target speeds still come from surface and grip.`;
+  }
+}
+
+$('gradeReset').addEventListener('click', () => {
+  state.settings.gradeRadii = null;
+  saveSettings();
+  syncSettingsForm();
+  analyse();
+  toast('Back to speed-based grades');
+});
 
 // Only show the setting for the chosen way of timing calls.
 function showCallRows() {
@@ -1613,7 +1923,7 @@ $('dcVoice').addEventListener('click', () => {
 // Start-up
 
 // Shown in Settings so you can check a phone has picked up the latest update.
-const APP_VERSION = '21';
+const APP_VERSION = '22';
 $('appVersion').textContent = APP_VERSION;
 
 initSettings();

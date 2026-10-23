@@ -1,7 +1,7 @@
 // Offline support: the app shell is cached so it opens at a track with no signal, and map
 // tiles you have already viewed (e.g. at home on Wi-Fi) are kept for later.
 
-const VERSION = 'rcp-v10';
+const VERSION = 'rcp-v11';
 const SHELL = [
   './',
   'index.html',
@@ -51,8 +51,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   // App files: network first so updates arrive, falling back to the cache when offline.
+  // `no-cache` makes the browser check with the server every time instead of reusing its own
+  // HTTP-cached copy (GitHub Pages allows 10 minutes), so a new version is picked up at once.
+  const sameOrigin = url.origin === location.origin;
   event.respondWith(
-    fetch(req)
+    fetch(req, sameOrigin ? { cache: 'no-cache' } : undefined)
       .then((res) => {
         if (res.ok && (url.origin === location.origin || url.hostname === 'cdnjs.cloudflare.com')) {
           const copy = res.clone();

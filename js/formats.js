@@ -236,7 +236,7 @@ export function toKML(name, analysis, runs, fmtSpeed = (k) => `${Math.round(k)} 
         return `<Placemark><styleUrl>#straight</styleUrl><LineString><tessellate>1</tessellate><coordinates>${coords(r.latlngs)}</coordinates></LineString></Placemark>`;
       }
       const c = r.corner;
-      return `<Placemark><name>${c.number}: ${esc(noteText(c))}</name><description>${Math.round(c.radius)} m radius, ${Math.round(c.angle)}°, ~${esc(fmtSpeed(c.speedKmh))}</description><styleUrl>#g${c.grade}</styleUrl><LineString><tessellate>1</tessellate><coordinates>${coords(r.latlngs)}</coordinates></LineString></Placemark>`;
+      return `<Placemark><name>${esc(noteText(c))}</name><description>${Math.round(c.radius)} m radius, ${Math.round(c.angle)}°, ~${esc(fmtSpeed(c.speedKmh))}</description><styleUrl>#g${c.grade}</styleUrl><LineString><tessellate>1</tessellate><coordinates>${coords(r.latlngs)}</coordinates></LineString></Placemark>`;
     })
     .join('\n');
   const hazardStyles = Object.entries(HAZARD_LEVELS)

@@ -1496,6 +1496,10 @@ $('dcVoice').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 // Start-up
 
+// Shown in Settings so you can check a phone has picked up the latest update.
+const APP_VERSION = '11';
+$('appVersion').textContent = APP_VERSION;
+
 initSettings();
 renderCourseList();
 renderCorners();

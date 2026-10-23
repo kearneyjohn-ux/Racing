@@ -189,6 +189,10 @@ button, input, select { font: inherit; color: inherit; }
   cursor: pointer;
 }
 .corner-list li:hover, .corner-list li.sel { background: var(--card); }
+.corner-list.tight .spd b { font-size: 19px; }
+.seg { display: flex; gap: 0; margin-bottom: 8px; background: var(--card); border-radius: 10px; padding: 3px; }
+.seg button { flex: 1; min-height: 38px; border: 0; border-radius: 8px; background: none; color: var(--muted); font-weight: 600; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
 .corner-list .n { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 .corner-list .txt b { display: block; font-weight: 600; }
 .corner-list .txt small { color: var(--muted); }

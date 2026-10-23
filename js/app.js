@@ -82,6 +82,7 @@ const APP_DEFAULTS = {
   voice: true,
   voiceChoice: 'default',
   gpxNames: 'full',
+  cornerSort: 'track',
   leadSeconds: 5,
   callMode: 'distance',
   callDistance: 100,
@@ -541,15 +542,30 @@ function renderCorners() {
   $('legend').innerHTML = GRADES.map(
     (g, i) => `<span><span class="chip" style="background:${g.color};color:${g.ink}">${g.id}</span>${gradeRange(g, i)}</span>`,
   ).join('');
-  $('cornerList').innerHTML = a.corners
-    .map((c) => {
+  const tight = state.settings.cornerSort === 'tight';
+  document.querySelectorAll('#cornerSort [data-sort]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.sort === state.settings.cornerSort)));
+  const km = (m) => `${(m / 1000).toFixed(2)} km`;
+  const list = tight ? [...a.corners].sort((x, y) => x.radius - y.radius) : a.corners;
+  $('cornerList').classList.toggle('tight', tight);
+  $('cornerList').innerHTML = list
+    .map((c, i) => {
       const g = GRADE[c.grade];
       const edited = c.grade !== c.autoGrade || c.note ? '<span class="edited">edited</span>' : '';
+      const guessed = c.guessed ? ' · <span class="guessed">guessed (filled gap)</span>' : '';
+      if (tight) {
+        // Tightest first: rank, rating, where it is on the track, and the radius up front.
+        return `<li data-n="${c.number}">
+        <span class="n">${i + 1}</span>
+        <span class="chip" style="background:${g.color};color:${g.ink}">${esc(shortLabel(c))}</span>
+        <span class="txt"><b>${esc(noteText(c))}${edited}</b><small>at ${km(c.startS)} · ${Math.round(c.angle)}° · target ${fmtSpeed(c.speedKmh)}${guessed}</small></span>
+        <span class="spd"><b>${Math.round(c.radius)} m</b><small>radius</small></span>
+      </li>`;
+      }
       const driven = c.drivenKmh !== null ? ` · you did ${Math.round(toUnit(c.drivenKmh))}` : '';
       return `<li data-n="${c.number}">
         <span class="n">${c.number}</span>
         <span class="chip" style="background:${g.color};color:${g.ink}">${esc(shortLabel(c))}</span>
-        <span class="txt"><b>${esc(noteText(c))}${edited}</b><small>${Math.round(c.radius)} m radius · ${Math.round(c.angle)}° · at ${fmtDist(c.startS)}${driven}${c.guessed ? ' · <span class="guessed">guessed (filled gap)</span>' : ''}</small></span>
+        <span class="txt"><b>${esc(noteText(c))}${edited}</b><small>${Math.round(c.radius)} m radius · ${Math.round(c.angle)}° · at ${fmtDist(c.startS)}${driven}${guessed}</small></span>
         <span class="spd"><b>${Math.round(toUnit(c.speedKmh))}</b><small>${speedUnit()}</small></span>
       </li>`;
     })
@@ -585,6 +601,15 @@ function focusCorner(n) {
   setTimeout(() => state.markers.get(n)?.openPopup(), 650);
   highlightListItem(n);
 }
+
+$('cornerSort').addEventListener('click', (e) => {
+  const sort = e.target.closest('[data-sort]')?.dataset.sort;
+  if (!sort || sort === state.settings.cornerSort) return;
+  state.settings.cornerSort = sort;
+  saveSettings();
+  renderCorners();
+  $('cornerSort').scrollIntoView({ block: 'nearest' });
+});
 
 $('cornerList').addEventListener('click', (e) => {
   const li = e.target.closest('li[data-n]');
@@ -1588,7 +1613,7 @@ $('dcVoice').addEventListener('click', () => {
 // Start-up
 
 // Shown in Settings so you can check a phone has picked up the latest update.
-const APP_VERSION = '13';
+const APP_VERSION = '14';
 $('appVersion').textContent = APP_VERSION;
 
 initSettings();

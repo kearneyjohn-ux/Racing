@@ -133,6 +133,11 @@
           <label class="check"><input type="checkbox" name="listen"> Listen for hazard calls while recording (say green, orange or red)</label>
           <label class="check"><input type="checkbox" name="autoStop"> Stop recording automatically at the end of the lap</label>
           <label class="check"><input type="checkbox" name="voice"> Speak pace notes in drive mode</label>
+          <label>Voice
+            <select name="voiceChoice" id="voiceSelect"></select>
+            <small id="voiceInfo"></small>
+          </label>
+          <button type="button" class="btn btn-ghost" id="voiceTest">Test voice</button>
           <label>Call corners
             <select name="callMode">
               <option value="distance">At a set distance before the corner</option>

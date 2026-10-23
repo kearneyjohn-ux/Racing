@@ -80,6 +80,7 @@ const APP_DEFAULTS = {
   straightRadius: DEFAULTS.straightRadius,
   minAngle: DEFAULTS.minAngle,
   voice: true,
+  voiceChoice: 'default',
   leadSeconds: 5,
   callMode: 'distance',
   callDistance: 100,
@@ -629,6 +630,7 @@ $('panelGrip').addEventListener('click', () => {
 
 function initSettings() {
   const form = $('settingsForm');
+  populateVoices();
   $('surfaceSelect').innerHTML = Object.entries(SURFACES)
     .map(([id, s]) => `<option value="${id}">${s.label} (grip ${s.mu})</option>`)
     .join('');
@@ -654,6 +656,8 @@ function initSettings() {
       renderCorners();
     } else if (el.name === 'callMode') {
       showCallRows();
+    } else if (el.name === 'voiceChoice') {
+      updateVoiceInfo();
     } else if (!['voice', 'leadSeconds', 'callDistance', 'sayDistance', 'autoStop', 'listen'].includes(el.name)) {
       analyse();
     }
@@ -1233,13 +1237,97 @@ $('demoBtn').addEventListener('click', async () => {
 // ---------------------------------------------------------------------------
 // Drive mode
 
+// ---------------------------------------------------------------------------
+// Voices. Speech uses the voices installed on the phone. Browsers don't say whether a voice is
+// male or female, so the presets match well-known voice names (iPhone, Android, Windows, Mac).
+
+const VOICE_PRESETS = {
+  'us-female': {
+    label: 'American female',
+    lang: 'en-us',
+    prefer: ['Samantha', 'Ava', 'Allison', 'Susan', 'Zoe', 'Nicky', 'Evelyn', 'Google US English', 'Aria', 'Jenny', 'Zira', 'Michelle', 'Joanna', 'Salli', 'Kendra', 'Kimberly', 'Ivy', 'en-us-x-sfg', 'en-us-x-iob', 'en-us-x-tpf', 'en-us-x-iog'],
+    avoid: ['Alex', 'Fred', 'Tom', 'Aaron', 'Evan', 'Nathan', 'David', 'Mark', 'Guy', 'Ryan', 'Christopher', 'Eric', 'Steffan', 'Roger', 'Daniel', 'Junior', 'Ralph', 'en-us-x-iol', 'en-us-x-iom', 'en-us-x-tpd'],
+  },
+  'in-male': {
+    label: 'Indian male',
+    lang: 'en-in',
+    prefer: ['Rishi', 'Prabhat', 'Ravi', 'Hemant', 'Kunal', 'Aarav', 'en-in-x-end', 'en-in-x-ene', 'en-in-x-cxx'],
+    avoid: ['Veena', 'Lekha', 'Isha', 'Heera', 'Neerja', 'Aditi', 'Raveena', 'Kajal', 'Priya', 'Swara', 'Sangeeta', 'en-in-x-ena', 'en-in-x-enc', 'en-in-x-ahp'],
+  },
+};
+
+const voiceLang = (v) => v.lang.replace('_', '-').toLowerCase();
+const nameHas = (v, list) => list.some((n) => `${v.name} ${v.voiceURI}`.toLowerCase().includes(n.toLowerCase()));
+const allVoices = () => ('speechSynthesis' in window ? speechSynthesis.getVoices() : []);
+
+// The voice to use for the current setting, and whether we're sure it matches (male/female).
+function resolveVoice(choice = state.settings.voiceChoice) {
+  const voices = allVoices();
+  if (choice?.startsWith('uri:')) {
+    const v = voices.find((x) => x.voiceURI === choice.slice(4));
+    return { voice: v ?? null, sure: !!v };
+  }
+  const preset = VOICE_PRESETS[choice];
+  if (!preset) return { voice: null, sure: true };
+  const same = voices.filter((v) => voiceLang(v) === preset.lang);
+  const named = same.find((v) => nameHas(v, preset.prefer));
+  if (named) return { voice: named, sure: true };
+  const fallback = same.find((v) => !nameHas(v, preset.avoid));
+  return { voice: fallback ?? null, sure: false };
+}
+
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.rate = 1.15;
+  const { voice, sure } = resolveVoice();
+  if (voice) {
+    u.voice = voice;
+    u.lang = voice.lang;
+    // A male preset that fell back to a voice of unknown gender is pitched down a little.
+    if (!sure && state.settings.voiceChoice === 'in-male') u.pitch = 0.8;
+  }
   speechSynthesis.speak(u);
 }
+
+function populateVoices() {
+  const sel = $('voiceSelect');
+  const english = allVoices().filter((v) => voiceLang(v).startsWith('en'));
+  const presets = Object.entries(VOICE_PRESETS).map(([id, p]) => `<option value="${id}">${p.label}</option>`).join('');
+  const others = english
+    .map((v) => `<option value="uri:${esc(v.voiceURI)}">${esc(v.name)} (${esc(v.lang)})</option>`)
+    .join('');
+  sel.innerHTML = `<option value="default">Phone default</option>${presets}${others ? `<optgroup label="All English voices on this phone">${others}</optgroup>` : ''}`;
+  sel.value = state.settings.voiceChoice;
+  if (sel.value !== state.settings.voiceChoice) sel.value = 'default';
+  updateVoiceInfo();
+}
+
+function updateVoiceInfo() {
+  const info = $('voiceInfo');
+  if (!('speechSynthesis' in window)) {
+    info.textContent = 'This browser cannot speak.';
+    return;
+  }
+  const choice = state.settings.voiceChoice;
+  const { voice, sure } = resolveVoice(choice);
+  const preset = VOICE_PRESETS[choice];
+  if (!preset) {
+    info.textContent = voice ? `Using ${voice.name}.` : 'Using the phone\'s default voice.';
+    return;
+  }
+  const install =
+    choice === 'in-male'
+      ? 'iPhone: Settings → Accessibility → Spoken Content → Voices → English → India → Rishi. Android: Settings → Text-to-speech → Google → Install voice data → English (India).'
+      : 'iPhone: Settings → Accessibility → Spoken Content → Voices → English → United States → Samantha or Ava. Android: Settings → Text-to-speech → Google → Install voice data → English (United States).';
+  if (!voice) info.textContent = `No ${preset.label} voice is installed on this phone, so the default is used. To add one: ${install}`;
+  else if (!sure) info.textContent = `Using ${voice.name} (${voice.lang}); it may not be ${choice === 'in-male' ? 'male' : 'female'}. For a better match: ${install}`;
+  else info.textContent = `Using ${voice.name} (${voice.lang}).`;
+}
+
+if ('speechSynthesis' in window) speechSynthesis.addEventListener?.('voiceschanged', populateVoices);
+$('voiceTest').addEventListener('click', () => speak('100 metres, left 3 tightens, into right 4'));
 
 const REPLAY_SPEEDS = [1, 2, 4, 8, 16];
 
@@ -1497,7 +1585,7 @@ $('dcVoice').addEventListener('click', () => {
 // Start-up
 
 // Shown in Settings so you can check a phone has picked up the latest update.
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 $('appVersion').textContent = APP_VERSION;
 
 initSettings();

@@ -47,7 +47,8 @@
           <h2>Import a GPS file</h2>
           <p class="muted">GPX, KML, GeoJSON, CSV or NMEA from a GPS logger, lap timer, watch or Strava/Garmin export.</p>
           <div class="btn-row">
-            <label class="btn">Choose file<input type="file" id="fileInput" accept=".gpx,.kml,.geojson,.json,.csv,.txt,.nmea" hidden></label>
+            <!-- No "accept" filter: iPhones don't recognise .gpx/.kml/.nmea and grey those files out. The format is detected from the contents. -->
+            <label class="btn">Choose file<input type="file" id="fileInput" hidden></label>
             <button class="btn btn-ghost" id="demoBtn">Load demo course</button>
           </div>
         </div>

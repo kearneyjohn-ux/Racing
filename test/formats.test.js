@@ -75,7 +75,8 @@ test('GPX export carries corners and hazards, and hazards re-import', () => {
   const a = analyzeCourse(pts);
   const hazards = [{ lat: a.samples[50].lat, lon: a.samples[50].lon, level: 'orange' }];
   const gpx = toGPX('Lap <1>', pts, { corners: a.corners, hazards });
-  assert.match(gpx, /<wpt [^>]+><name>1\. Left \d[^<]*<\/name><desc>\d+ m radius/);
+  assert.match(gpx, /<wpt [^>]+><name>Left \d[^<]*<\/name><desc>\d+ m radius/);
+  assert.doesNotMatch(gpx, /<name>\d+\./, "corner waypoints carry no sequence numbers");
   assert.match(gpx, /<type>hazard-orange<\/type>/);
   assert.ok(gpx.indexOf('<wpt') < gpx.indexOf('<trk>'), 'waypoints come before the track (GPX 1.1 order)');
   assert.match(gpx, /<name>Lap &lt;1&gt;<\/name>/);

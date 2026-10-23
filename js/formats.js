@@ -151,7 +151,7 @@ export function toGPX(name, points, { corners = [], hazards = [], fmtSpeed = (k)
     `  <wpt lat="${f7(lat)}" lon="${f7(lon)}"><name>${esc(title)}</name>${desc ? `<desc>${esc(desc)}</desc>` : ''}<sym>${sym}</sym><type>${type}</type></wpt>`;
   const waypoints = [
     ...corners.map((c) =>
-      wpt(c.lat, c.lon, `${c.number}. ${noteText(c)}`, `${Math.round(c.radius)} m radius, ${Math.round(c.angle)}°, target ${fmtSpeed(c.speedKmh)}`, 'Flag, Blue', `corner-${c.grade}`),
+      wpt(c.lat, c.lon, noteText(c), `${Math.round(c.radius)} m radius, ${Math.round(c.angle)}°, target ${fmtSpeed(c.speedKmh)}`, 'Flag, Blue', `corner-${c.grade}`),
     ),
     ...hazards.map((h) => wpt(h.lat, h.lon, `${HAZARD_LEVELS[h.level].label} hazard`, '', 'Danger Area', `hazard-${h.level}`)),
   ];

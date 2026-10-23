@@ -1613,7 +1613,7 @@ $('dcVoice').addEventListener('click', () => {
 // Start-up
 
 // Shown in Settings so you can check a phone has picked up the latest update.
-const APP_VERSION = '20';
+const APP_VERSION = '21';
 $('appVersion').textContent = APP_VERSION;
 
 initSettings();

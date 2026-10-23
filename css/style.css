@@ -344,7 +344,7 @@ button, input, select { font: inherit; color: inherit; }
 
 /* While recording or driving, the map shrinks to the top of the screen above the big controls. */
 body.fullmode .topbar, body.fullmode .panel, body.fullmode .rec-fab { display: none; }
-body.fullmode .layout { height: 40%; }
+body.fullmode .layout { height: 40%; grid-template-columns: 1fr; }
 body.recording-on .layout { height: 34%; }
 body.fullmode .map-wrap { height: 100%; }
 
@@ -372,7 +372,7 @@ body.fullmode .map-wrap { height: 100%; }
 .rs-grid div { background: var(--card); border-radius: 10px; padding: 6px 8px; min-width: 0; }
 .rs-grid small { display: block; color: var(--muted); font-size: 12px; }
 .rs-grid b { font-size: clamp(15px, 2.4vh, 21px); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.rs-hazards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; flex: 1; max-height: 200px; min-height: 64px; }
+.rs-hazards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; flex: 1; max-height: 30vh; min-height: 64px; }
 .hz {
   border: 3px solid rgba(0, 0, 0, .35);
   border-radius: 14px;

@@ -81,6 +81,7 @@ const APP_DEFAULTS = {
   minAngle: DEFAULTS.minAngle,
   voice: true,
   voiceChoice: 'default',
+  gpxNames: 'full',
   leadSeconds: 5,
   callMode: 'distance',
   callDistance: 100,
@@ -398,7 +399,7 @@ function exportGPX(course) {
   } catch {
     /* too short to analyse: export the track alone */
   }
-  const gpx = toGPX(course.name, unpack(course.points), { corners, hazards: course.hazards ?? [], fmtSpeed });
+  const gpx = toGPX(course.name, unpack(course.points), { corners, hazards: course.hazards ?? [], fmtSpeed, names: state.settings.gpxNames });
   shareOrDownload(`${course.name.replace(/[^\w-]+/g, '_')}.gpx`, gpx, 'application/gpx+xml');
 }
 
@@ -656,6 +657,8 @@ function initSettings() {
       renderCorners();
     } else if (el.name === 'callMode') {
       showCallRows();
+    } else if (el.name === 'gpxNames') {
+      // Used at export time only.
     } else if (el.name === 'voiceChoice') {
       updateVoiceInfo();
     } else if (!['voice', 'leadSeconds', 'callDistance', 'sayDistance', 'autoStop', 'listen'].includes(el.name)) {
@@ -1585,7 +1588,7 @@ $('dcVoice').addEventListener('click', () => {
 // Start-up
 
 // Shown in Settings so you can check a phone has picked up the latest update.
-const APP_VERSION = '12';
+const APP_VERSION = '13';
 $('appVersion').textContent = APP_VERSION;
 
 initSettings();

@@ -1,6 +1,6 @@
 // Import and export of GPS tracks. Regex-based parsing keeps this DOM-free and testable in node.
 
-import { GRADE, HAZARD_LEVELS, noteText } from './analysis.js';
+import { GRADE, HAZARD_LEVELS, noteText, shortNote } from './analysis.js';
 
 const num = (v) => (v === undefined || v === null || v === '' ? NaN : Number(v));
 const attr = (tag, name) => {
@@ -146,13 +146,17 @@ const f7 = (v) => Number(v).toFixed(7);
 
 // GPX 1.1 with the recorded track, plus corners and hazards as waypoints so they show up in
 // other GPS apps. Hazard waypoints carry <type>hazard-LEVEL</type> so they can be re-imported.
-export function toGPX(name, points, { corners = [], hazards = [], fmtSpeed = (k) => `${Math.round(k)} km/h` } = {}) {
+// `names`: 'full' ("Left 2 tightens") or 'short' ("L2 T"; the full wording moves into the description).
+export function toGPX(name, points, { corners = [], hazards = [], fmtSpeed = (k) => `${Math.round(k)} km/h`, names = 'full' } = {}) {
   const wpt = (lat, lon, title, desc, sym, type) =>
     `  <wpt lat="${f7(lat)}" lon="${f7(lon)}"><name>${esc(title)}</name>${desc ? `<desc>${esc(desc)}</desc>` : ''}<sym>${sym}</sym><type>${type}</type></wpt>`;
   const waypoints = [
-    ...corners.map((c) =>
-      wpt(c.lat, c.lon, noteText(c), `${Math.round(c.radius)} m radius, ${Math.round(c.angle)}°, target ${fmtSpeed(c.speedKmh)}`, 'Flag, Blue', `corner-${c.grade}`),
-    ),
+    ...corners.map((c) => {
+      const detail = `${Math.round(c.radius)} m radius, ${Math.round(c.angle)}°, target ${fmtSpeed(c.speedKmh)}`;
+      return names === 'short'
+        ? wpt(c.lat, c.lon, shortNote(c), `${noteText(c)}: ${detail}`, 'Flag, Blue', `corner-${c.grade}`)
+        : wpt(c.lat, c.lon, noteText(c), detail, 'Flag, Blue', `corner-${c.grade}`);
+    }),
     ...hazards.map((h) => wpt(h.lat, h.lon, `${HAZARD_LEVELS[h.level].label} hazard`, '', 'Danger Area', `hazard-${h.level}`)),
   ];
   const pts = points

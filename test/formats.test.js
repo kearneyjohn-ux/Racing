@@ -89,3 +89,16 @@ test('GPX export carries corners and hazards, and hazards re-import', () => {
   assert.equal(hz[0].level, 'orange');
   assert.ok(Math.abs(hz[0].lat - hazards[0].lat) < 1e-6);
 });
+
+test('GPX short waypoint names', () => {
+  const pts = toLatLon(
+    buildPath([{ straight: 150 }, { radius: 60, angle: 45, dir: 'R' }, { radius: 20, angle: 70, dir: 'R' }, { straight: 150 }, { radius: 10, angle: 180, dir: 'L' }, { straight: 150 }]),
+  );
+  const a = analyzeCourse(pts);
+  const gpx = toGPX('Short', pts, { corners: a.corners, names: 'short' });
+  const names = [...gpx.matchAll(/<wpt[^>]*><name>([^<]*)<\/name>/g)].map((m) => m[1]);
+  assert.deepEqual(names, ['R2 LG T', 'L1 HP']);
+  assert.match(gpx, /<desc>Right 2 long tightens: \d+ m radius/, 'full wording kept in the description');
+  // Full names remain the default.
+  assert.match(toGPX('Full', pts, { corners: a.corners }), /<name>Right 2 long tightens<\/name>/);
+});

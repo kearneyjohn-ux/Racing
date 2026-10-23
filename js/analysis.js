@@ -513,6 +513,12 @@ export function shortLabel(c) {
   return `${c.dir}${c.grade}`;
 }
 
+// Compact note for devices with small screens: L/R + grade, then HP (hairpin), LG (long),
+// T (tightens), O (opens). E.g. "L1 HP T", "R3 O".
+export function shortNote(c) {
+  return [shortLabel(c), c.hairpin && 'HP', c.long && 'LG', c.tightens && 'T', c.opens && 'O'].filter(Boolean).join(' ');
+}
+
 export function spokenNote(c) {
   const words = [c.dir === 'L' ? 'left' : 'right', c.grade, ...modifiers(c)];
   if (c.note) words.push(c.note);

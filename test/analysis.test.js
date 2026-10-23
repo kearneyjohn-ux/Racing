@@ -23,6 +23,8 @@ import {
   gradeFor as gradeForOpts,
   physicsGradeRadii,
   compareTracks,
+  parseCornerCalls,
+  callsFromWaypoints,
 } from '../js/analysis.js';
 import { buildPath, toLatLon, simulateGPS, speedProfile, rng } from '../tools/track-gen.js';
 
@@ -449,4 +451,50 @@ test('two recordings of the same course are compared corner by corner', () => {
   assert.equal(r.pairs.length, 4);
   assert.ok(r.medianRatio > 0.7 && r.medianRatio < 1.3);
   assert.ok(physicsGradeRadii().every((v, i, arr) => i === 0 || v > arr[i - 1]));
+});
+
+test('waypoints naming several corners are split into a run of corners', () => {
+  const calls = (n) => parseCornerCalls(n).map((c) => c.dir + c.grade + (c.hairpin ? 'hp' : ''));
+  assert.deepEqual(calls('R2L2'), ['R2', 'L2']);
+  assert.deepEqual(calls('R4 L3 R3'), ['R4', 'L3', 'R3']);
+  assert.deepEqual(calls('L4R4L3'), ['L4', 'R4', 'L3']);
+  assert.deepEqual(calls('GATE L2'), ['L2']);
+  assert.deepEqual(calls('R HAIRPIN'), ['R1hp']);
+  assert.deepEqual(calls('R2 HAIRPIN'), ['R2hp']);
+  assert.deepEqual(calls('3R'), ['R3']);
+  for (const n of ['028', 'Rpt046', 'GATE', 'KL3', 'R3 LONG'.slice(3)]) assert.deepEqual(calls(n), [], n);
+});
+
+test('follow-on corners in one waypoint are matched to the next app corners', () => {
+  const parts = [{ straight: 200 }, { radius: 30, angle: 70, dir: 'R' }, { straight: 40 }, { radius: 30, angle: 70, dir: 'L' }, { straight: 40 }, { radius: 60, angle: 50, dir: 'R' }, { straight: 300 }];
+  const a = analyzeCourse(track(parts));
+  assert.equal(a.corners.length, 3);
+  const [c1, c2, c3] = a.corners;
+  const r = compareWithCalls(a, [{ lat: c1.lat, lon: c1.lon, name: 'R2L2R4', dir: 'R', grade: Number(c1.grade), follow: [{ dir: 'L', grade: Number(c2.grade) }, { dir: 'R', grade: Number(c3.grade) }] }]);
+  assert.equal(r.matches.length, 3);
+  assert.equal(r.exact, 3);
+  assert.equal(r.missed.length, 0);
+  // A call from another event in the same file is ignored, not reported as off course.
+  const far = compareWithCalls(a, [{ lat: c1.lat + 1, lon: c1.lon, dir: 'L', grade: 3, name: 'elsewhere' }]);
+  assert.equal(far.elsewhere, 1);
+  assert.equal(far.offCourse.length, 0);
+});
+
+test('a call dropped just before a corner matches that corner, not the one it sits in', () => {
+  const parts = [{ straight: 200 }, { radius: 40, angle: 60, dir: 'L' }, { straight: 20 }, { radius: 40, angle: 60, dir: 'R' }, { straight: 300 }];
+  const a = analyzeCourse(track(parts));
+  assert.equal(a.corners.length, 2);
+  const [left, right] = a.corners;
+  // "R3" logged at the exit of the left, as the truck drops its note for the right.
+  const at = a.samples[left.endIdx - 5];
+  const calls = callsFromWaypoints([
+    { lat: at.lat, lon: at.lon, name: 'R3' },
+    { lat: at.lat, lon: at.lon, name: '012' },
+    { lat: at.lat, lon: at.lon, name: 'L2', type: 'hazard-red' },
+  ]);
+  assert.equal(calls.length, 1, 'numbered marks and hazards are not corner calls');
+  const r = compareWithCalls(a, calls);
+  assert.equal(r.matches.length, 1);
+  assert.equal(r.matches[0].corner, right);
+  assert.equal(r.matches[0].dirMatch, true);
 });

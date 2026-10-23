@@ -15,7 +15,7 @@ import {
   compareTracks,
   learnGradeRadii,
   bestGrip,
-  parseCornerCall,
+  callsFromWaypoints,
   physicsGradeRadii,
   noteText,
   placeHazards,
@@ -24,7 +24,7 @@ import {
   spokenNote,
   SURFACES,
 } from './analysis.js';
-import { parseGPXHazards, parseTrackFile, parseWaypoints, toGeoJSON, toGPX, toKML, toPaceNotesCSV } from './formats.js';
+import { isUSR, parseGPXHazards, parseTrackFile, parseUSR, parseWaypoints, toGeoJSON, toGPX, toKML, toPaceNotesCSV } from './formats.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -651,7 +651,7 @@ document.querySelectorAll('[data-export]').forEach((btn) =>
 // Compare with a truck log: corner calls saved as waypoints are taken as correct, the app's
 // corners are matched to them, and settings that would make the app agree are recommended.
 
-const cmp = { name: '', calls: [], points: null, layer: L.layerGroup().addTo(map), running: false };
+const cmp = { name: '', calls: [], points: null, trails: [], marks: [], layer: L.layerGroup().addTo(map), running: false };
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const pct = (x) => `${Math.round(x * 100)}%`;
 const km = (m) => `${(m / 1000).toFixed(2)} km`;
@@ -667,7 +667,7 @@ function renderCompareCourses() {
 }
 
 function updateCompareButton() {
-  $('cmpRun').disabled = cmp.running || !$('cmpCourse').value || (cmp.calls.length < 3 && !cmp.points);
+  $('cmpRun').disabled = cmp.running || !$('cmpCourse').value || (cmp.calls.length < 3 && !cmp.points && !cmp.trails.length);
 }
 
 $('cmpCourse').addEventListener('change', updateCompareButton);
@@ -676,26 +676,76 @@ $('cmpFile').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
-  const text = await file.text();
-  const waypoints = parseWaypoints(text);
+  let waypoints;
   cmp.name = file.name;
-  cmp.calls = waypoints
-    .map((w) => ({ ...w, ...parseCornerCall(w.name) }))
-    // Skip our own hazard waypoints if the file came from this app.
-    .filter((w) => w.dir && !/^hazard-/.test(w.type));
+  cmp.trails = [];
+  cmp.points = null;
   try {
-    cmp.points = parseTrackFile(text, file.name);
-  } catch {
-    cmp.points = null;
+    const buf = await file.arrayBuffer();
+    if (isUSR(buf)) {
+      const usr = parseUSR(buf);
+      waypoints = usr.waypoints;
+      cmp.trails = usr.trails;
+    } else {
+      const text = new TextDecoder().decode(buf);
+      waypoints = parseWaypoints(text);
+      try {
+        cmp.points = parseTrackFile(text, file.name);
+      } catch {
+        cmp.points = null;
+      }
+    }
+  } catch (err) {
+    cmp.calls = [];
+    $('cmpFileInfo').textContent = `Couldn't read ${file.name}: ${err.message}`;
+    updateCompareButton();
+    return;
   }
-  const other = waypoints.length - cmp.calls.length;
+  cmp.calls = callsFromWaypoints(waypoints);
+  // Waypoints that aren't corner calls (warnings, numbered marks) are shown on the map for reference.
+  cmp.marks = waypoints.filter((w) => !callsFromWaypoints([w]).length && !/^hazard-/.test(w.type ?? ''));
+  const corners = cmp.calls.reduce((t, c) => t + 1 + (c.follow?.length ?? 0), 0);
+  const trailRow = $('cmpTrailRow');
+  trailRow.hidden = !cmp.trails.length;
+  if (cmp.trails.length) {
+    $('cmpTrail').innerHTML =
+      '<option value="auto">Auto: the one on this course</option>' +
+      cmp.trails.map((t, i) => `<option value="${i}">${esc(t.name || `Trail ${i + 1}`)} (${t.points.length} points)</option>`).join('') +
+      '<option value="none">None</option>';
+  }
   $('cmpFileInfo').textContent =
-    `${file.name}: ${cmp.calls.length} corner calls` +
-    (other ? `, ${other} other waypoints ignored` : '') +
-    (cmp.points ? `, track of ${cmp.points.length} points` : ', no track') +
-    (cmp.calls.length < 3 ? (cmp.points ? '. No corner calls, so the corner shapes will be compared.' : '. Nothing to compare: no corner calls or track found.') : '.');
+    `${file.name}: ${cmp.calls.length} corner waypoints (${corners} corners)` +
+    (cmp.marks.length ? `, ${cmp.marks.length} other waypoints` : '') +
+    (cmp.trails.length ? `, ${cmp.trails.length} trails` : cmp.points ? `, track of ${cmp.points.length} points` : ', no track') +
+    (cmp.calls.length < 3 ? (cmp.points || cmp.trails.length ? '. No corner calls, so the corner shapes will be compared.' : '. Nothing to compare: no corner calls or track found.') : '. Calls from other events in the file are ignored.');
   updateCompareButton();
 });
+
+// The trail drawn alongside the comparison: the chosen one, or the one with most points on this course.
+function truckTrail(course) {
+  if (!cmp.trails.length) return cmp.points;
+  const pick = $('cmpTrail').value;
+  if (pick === 'none') return null;
+  if (pick !== 'auto') return cmp.trails[Number(pick)]?.points ?? null;
+  // Score each trail by how much of it lies on the course and how much of the course it covers,
+  // checking about 150 points of each against about 1500 of the course.
+  const thin = (arr, n) => arr.filter((_, i) => i % Math.max(1, Math.floor(arr.length / n)) === 0);
+  const course_ = thin(unpack(course.points), 1500);
+  const near = (p, set) => set.some((q) => haversine(p, q) < 60);
+  let best = null;
+  let bestScore = 0.4;
+  for (const t of cmp.trails) {
+    const tp = thin(t.points, 150);
+    const onCourse = tp.filter((p) => near(p, course_)).length / tp.length;
+    if (onCourse < 0.3) continue;
+    const dense = thin(t.points, 3000);
+    const check = thin(course_, 150);
+    const covered = check.filter((p) => near(p, dense)).length / check.length;
+    const sc = Math.min(onCourse, covered);
+    if (sc > bestScore) [best, bestScore] = [t, sc];
+  }
+  return best?.points ?? null;
+}
 
 $('cmpRun').addEventListener('click', () => runCompare());
 
@@ -712,8 +762,12 @@ async function runCompare() {
     if (course !== state.course) selectCourse(course, true);
     const pts = unpack(course.points);
     const opts = analysisOptions(course);
-    if (cmp.calls.length >= 3) await compareCalls(course, pts, opts, progress);
-    else await compareShapes(course, pts, opts, progress);
+    cmp.track = truckTrail(course);
+    const done = cmp.calls.length >= 3 && (await compareCalls(course, pts, opts, progress));
+    if (!done) {
+      if (!cmp.track) throw new Error(cmp.calls.length ? "none of the truck's corner calls are on this course. Check you picked the right course." : 'the truck file has no corner calls or track.');
+      await compareShapes(course, pts, opts, progress);
+    }
     out.scrollIntoView({ block: 'start', behavior: 'smooth' });
   } catch (err) {
     out.innerHTML = `<div class="card">Couldn't compare: ${esc(err.message)}</div>`;
@@ -738,6 +792,7 @@ async function compareCalls(course, pts, opts, progress) {
   let calls = cmp.calls.map((c) => ({ ...c }));
   const base = analyzeCourse(pts, opts);
   let r = compareWithCalls(base, calls);
+  if (r.elsewhere + r.offCourse.length === calls.length) return false;
   if (looksReversed(r.matches)) {
     const top = Math.max(...calls.map((c) => c.grade));
     calls = calls.map((c) => ({ ...c, grade: top + 1 - c.grade }));
@@ -745,13 +800,15 @@ async function compareCalls(course, pts, opts, progress) {
     notes.push(`Your log looks like it uses 1 for the fastest corners, so its grades were flipped (1 ↔ ${top}) to compare.`);
   }
   if (calls.some((c) => c.grade === 6)) notes.push("Your log uses grade 6; it's compared as a 5, the app's fastest grade.");
-  if (r.offCourse.length) notes.push(`${r.offCourse.length} truck call${r.offCourse.length > 1 ? 's are' : ' is'} more than 80 m from this course and ${r.offCourse.length > 1 ? 'were' : 'was'} skipped. Check you picked the right course.`);
+  if (r.elsewhere) notes.push(`${r.elsewhere} corner waypoint${r.elsewhere > 1 ? 's' : ''} from other events in the file ${r.elsewhere > 1 ? 'were' : 'was'} ignored.`);
+  if (r.offCourse.length) notes.push(`${r.offCourse.length} truck call${r.offCourse.length > 1 ? 's are' : ' is'} more than 80 m from this course and ${r.offCourse.length > 1 ? 'were' : 'was'} skipped${r.offCourse.length > 0.2 * (calls.length - r.elsewhere) ? '. Check you picked the right course' : ''}.`);
 
   const pairs = r.matches.filter((m) => m.dirMatch).map((m) => ({ radius: m.corner.radius, grade: Math.min(5, m.call.grade) }));
   const now = r.graded ? r.exact / r.graded : 0;
   const recs = [];
+  let learned = null;
   if (pairs.length >= 5) {
-    const learned = learnGradeRadii(pairs, physicsGradeRadii({ ...opts, gradeRadii: null }));
+    learned = learnGradeRadii(pairs, physicsGradeRadii({ ...opts, gradeRadii: null }));
     const grip = bestGrip(pairs, opts);
     const radiiText = learned.radii.map((v, i) => `${i + 1}|${i + 2} at ${Math.round(v)} m`).join(', ');
     if (learned.agreement > now + 0.04) {
@@ -777,6 +834,8 @@ async function compareCalls(course, pts, opts, progress) {
     }
   }
 
+  if (pairs.length >= 5 && !recs.length)
+    notes.push(`Grades: no grade setting fits your calls noticeably better than the current one${learned ? ` (the closest, limits learned from your calls, gives ${pct(learned.agreement)} same grade)` : ''}. Most of the differences that are left are corners you've graded differently at similar radii.`);
   // Does the app find the same corners? Try gentler/stricter detection and keep what helps.
   const score = (x) => x.matches.length - 0.5 * x.extra.length;
   const tryValues = async (key, values, label) => {
@@ -807,12 +866,13 @@ async function compareCalls(course, pts, opts, progress) {
     });
   }
   renderCallResults(course, r, now, recs, notes);
+  return true;
 }
 
 async function compareShapes(course, pts, opts, progress) {
   progress('Analysing the truck track…');
   await tick();
-  const truck = analyzeCourse(cmp.points, { ...opts, smoothing: 3, overrides: [] });
+  const truck = analyzeCourse(cmp.track, { ...opts, smoothing: 3, overrides: [] });
   const results = [];
   for (const smoothing of [3, 5, 8]) {
     progress(`Trying GPS smoothing ${smoothing} m…`);
@@ -867,7 +927,12 @@ const callLabel = (c) => `${c.dir}${c.grade}`;
 
 function renderCallResults(course, r, now, recs, notes) {
   cmp.layer.clearLayers();
-  if (cmp.points) L.polyline(cmp.points.map((p) => [p.lat, p.lon]), { color: '#3fa7ff', weight: 2, dashArray: '6 6', opacity: 0.8, interactive: false }).addTo(cmp.layer);
+  if (cmp.track) L.polyline(cmp.track.map((p) => [p.lat, p.lon]), { color: '#3fa7ff', weight: 2, dashArray: '6 6', opacity: 0.8, interactive: false }).addTo(cmp.layer);
+  const view = L.latLngBounds(unpack(course.points).map((p) => [p.lat, p.lon])).pad(0.1);
+  for (const w of cmp.marks) {
+    if (view.contains([w.lat, w.lon]))
+      L.circleMarker([w.lat, w.lon], { radius: 5, color: '#fff', weight: 1.5, fillColor: '#8a8f98', fillOpacity: 0.9 }).bindTooltip(`Truck waypoint ${esc(w.name || '(no name)')}${w.desc ? `: ${esc(w.desc)}` : ''}`).addTo(cmp.layer);
+  }
   const mark = (call, cls, title) =>
     L.marker([call.lat, call.lon], { icon: L.divIcon({ className: '', html: `<div class="call-marker ${cls}">${esc(callLabel(call))}</div>`, iconSize: null, iconAnchor: [14, -8] }), title, zIndexOffset: 300 }).addTo(cmp.layer);
   for (const m of r.matches) mark(m.call, m.dirMatch && m.gradeDiff === 0 ? 'same' : 'diff', `Truck: ${m.call.name}`);
@@ -1923,7 +1988,7 @@ $('dcVoice').addEventListener('click', () => {
 // Start-up
 
 // Shown in Settings so you can check a phone has picked up the latest update.
-const APP_VERSION = '22';
+const APP_VERSION = '23';
 $('appVersion').textContent = APP_VERSION;
 
 initSettings();

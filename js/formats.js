@@ -301,3 +301,117 @@ export function toPaceNotesCSV(analysis, fmtSpeed = (k) => Math.round(k), hazard
   }
   return rows.map((r) => r.join(',')).join('\n') + '\n';
 }
+
+// ---------------------------------------------------------------------------
+// Lowrance / Navico .usr files (format versions 4-6): waypoints, routes and trails.
+// Binary, little-endian. Waypoints use Lowrance's spherical Mercator; trail points use radians.
+
+const USR_RADIUS = 6356752.3142;
+
+export function isUSR(buffer) {
+  const v = new DataView(buffer);
+  if (buffer.byteLength < 40) return false;
+  const version = v.getInt32(0, true);
+  const titleLen = v.getInt32(8, true);
+  if (version < 4 || version > 6 || titleLen < 1 || titleLen > 200) return false;
+  const title = new TextDecoder('latin1').decode(new Uint8Array(buffer, 12, titleLen));
+  return /navico|lowrance|export/i.test(title);
+}
+
+export function parseUSR(buffer) {
+  const v = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  const utf16 = new TextDecoder('utf-16le');
+  const latin1 = new TextDecoder('latin1');
+  let p = 0;
+  const i32 = () => ((p += 4), v.getInt32(p - 4, true));
+  const u16 = () => ((p += 2), v.getUint16(p - 2, true));
+  const skip = (n) => (p += n);
+  const astr = () => {
+    const n = i32();
+    const s = n > 0 ? latin1.decode(bytes.subarray(p, p + n)) : '';
+    p += Math.max(0, n);
+    return s;
+  };
+  const wstr = () => {
+    const n = i32();
+    const s = n > 0 ? utf16.decode(bytes.subarray(p, p + n)) : '';
+    p += Math.max(0, n);
+    return s;
+  };
+  const version = i32();
+  if (version < 4 || version > 6) throw new Error(`Lowrance file version ${version} isn't supported (only 4-6).`);
+  i32(); // data stream version
+  astr(); // title
+  astr(); // date
+  skip(4 + 4 + 1 + 4); // creation date, time, unused, serial number
+  astr(); // content description
+
+  const waypoints = [];
+  const nw = i32();
+  for (let k = 0; k < nw; k++) {
+    skip(16 + 4 + 8 + 2); // uuid, unit number, sequence number, stream version
+    const name = wstr();
+    skip(4); // unit number
+    const x = i32();
+    const y = i32();
+    i32(); // flags
+    const icon = u16();
+    const color = u16();
+    const desc = wstr();
+    skip(4 + 4 + 4 + 1 + 4 + 4 + 4 + 4); // alarm, date, time, unused, depth, loran
+    const lon = ((x / USR_RADIUS) * 180) / Math.PI;
+    const lat = ((2 * Math.atan(Math.exp(y / USR_RADIUS)) - Math.PI / 2) * 180) / Math.PI;
+    waypoints.push({ name, desc, lat, lon, icon, color });
+  }
+
+  const nr = i32();
+  for (let k = 0; k < nr; k++) {
+    skip(16 + 4 + 8 + 2);
+    wstr();
+    skip(4); // unknown
+    const legs = i32();
+    skip(16 * legs + 10);
+  }
+
+  const trails = [];
+  const nt = i32();
+  const pointAt = (q) => {
+    if (q + 27 > bytes.length || bytes[q] !== 3 || bytes[q + 1] !== 0) return false;
+    const lon = v.getFloat64(q + 7, true);
+    const lat = v.getFloat64(q + 23 - 8, true);
+    const attrs = v.getInt32(q + 23, true);
+    return Math.abs(lon) <= Math.PI && Math.abs(lat) <= 1.6 && attrs >= 0 && attrs <= 32;
+  };
+  for (let k = 0; k < nt; k++) {
+    skip(4 + 8 + 2); // unit number, sequence number, stream version
+    const name = wstr();
+    skip(4 + 4); // flags, colour
+    wstr(); // comment
+    skip(4 + 4); // creation date, time
+    // A few header bytes differ between versions; the point count sits just before the first point.
+    let found = -1;
+    for (let off = 0; off < 48 && p + off + 8 <= bytes.length; off++) {
+      const count = v.getInt32(p + off, true);
+      if (count > 0 && count < 5e6 && pointAt(p + off + 4)) {
+        found = p + off;
+        break;
+      }
+    }
+    if (found < 0) break;
+    p = found;
+    const count = i32();
+    const points = [];
+    for (let i = 0; i < count && p + 27 <= bytes.length; i++) {
+      const t = v.getInt32(p + 3, true);
+      const lon = (v.getFloat64(p + 7, true) * 180) / Math.PI;
+      const lat = (v.getFloat64(p + 15, true) * 180) / Math.PI;
+      const attrs = v.getInt32(p + 23, true);
+      p += 27 + 5 * attrs;
+      // Times before 2010 are the unit's "no clock" placeholders; treat them as missing.
+      points.push({ lat, lon, t: t > 1262304000 ? t * 1000 : NaN });
+    }
+    if (points.length) trails.push({ name, points: points.filter((q) => Math.abs(q.lat) > 0.001 || Math.abs(q.lon) > 0.001) });
+  }
+  return { waypoints, trails: trails.filter((t) => t.points.length >= 3) };
+}

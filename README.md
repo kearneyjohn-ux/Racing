@@ -38,9 +38,9 @@ It runs in the phone's browser, so there's nothing to install. You can add it to
 
 ## Compare with a truck log
 
-The **Compare** tab checks the app's corner grades against a GPX logged in the truck.
+The **Compare** tab checks the app's corner grades against a file logged in the truck: a **Lowrance .usr** export (Navico waypoints, routes and trails) or a GPX.
 
-- **With corner calls**: save each corner as a waypoint named like `L3`, `R 2`, `Left 4` or `3R` (other waypoints are ignored). The calls are taken as correct. The app matches them to its corners and shows:
+- **With corner calls**: each corner is a waypoint named like `L3`, `R 2`, `Left 4` or `3R`. A waypoint naming a run of corners (`R4L3`, `L2 R2`) is split into corners that follow on from each other. Other waypoints (numbered marks, warnings) aren't graded but are shown on the map as grey dots. Calls from other events in the same file are ignored, so a whole season's .usr can be loaded. The truck's trail on this course is picked automatically and drawn dashed blue (or choose one). The calls are taken as correct. Each is matched to the nearest app corner, preferring one turning the same way and allowing for notes dropped up to 100 m before the corner. The app then shows:
   - how many it agrees with (same grade, within one grade, and whether it rates faster or slower on average)
   - every disagreement and every truck corner it didn't find, tappable on the map
   - **recommended changes**, each showing the improvement it would make, applied with one tap:

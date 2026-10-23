@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTrackFile, parseGPXHazards, toGPX, toKML, toGeoJSON, toPaceNotesCSV } from '../js/formats.js';
+import { parseTrackFile, parseGPXHazards, toGPX, toKML, toGeoJSON, toPaceNotesCSV, parseUSR, isUSR } from '../js/formats.js';
 import { analyzeCourse, colourRuns, placeHazards } from '../js/analysis.js';
 import { buildPath, toLatLon } from '../tools/track-gen.js';
 
@@ -114,4 +114,47 @@ test('GPX keeps GPS accuracy and speed so another phone analyses the course the 
   const back = parseTrackFile(gpx, 'a.gpx');
   assert.deepEqual(back.map((p) => p.acc), [48.5, 4.2, NaN]);
   assert.deepEqual(back.map((p) => p.speed), [0, 13.37, NaN]);
+});
+
+// A tiny Lowrance .usr (format 6) built byte by byte: two waypoints and one trail of three timed points.
+function buildUSR() {
+  const out = [];
+  const i32 = (v) => { const b = Buffer.alloc(4); b.writeInt32LE(v); out.push(b); };
+  const u16 = (v) => { const b = Buffer.alloc(2); b.writeUInt16LE(v); out.push(b); };
+  const f64 = (v) => { const b = Buffer.alloc(8); b.writeDoubleLE(v); out.push(b); };
+  const raw = (n, fill = 0) => out.push(Buffer.alloc(n, fill));
+  const astr = (s) => { i32(s.length); out.push(Buffer.from(s, 'latin1')); };
+  const wstr = (s) => { const b = Buffer.from(s, 'utf16le'); i32(b.length); out.push(b); };
+  const R = 6356752.3142;
+  i32(6); i32(10); astr('Navico export data file'); astr('10/22/2026'); i32(0); i32(0); raw(1); i32(0); astr('Waypoints, routes, and trails');
+  const wps = [['L3', -30.52, 121.49], ['R4 L2', -30.53, 121.5]];
+  i32(wps.length);
+  for (const [name, lat, lon] of wps) {
+    raw(16); i32(0); raw(8); u16(2); wstr(name); i32(0);
+    i32(Math.round((lon * Math.PI / 180) * R)); i32(Math.round(Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2)) * R));
+    i32(2); u16(28); u16(0); i32(-1); raw(4); i32(0); i32(0); raw(1); raw(4); i32(-1); i32(0); i32(0);
+  }
+  i32(0); // routes
+  i32(1); // trails
+  i32(0); raw(8); u16(6); wstr('KDR RACE'); i32(2); i32(5); i32(0); i32(0); i32(0); raw(3);
+  i32(3);
+  [[-30.52, 121.49], [-30.5201, 121.4901], [-30.5202, 121.4902]].forEach(([lat, lon], k) => {
+    u16(3); raw(1, 3); i32(1780000000 + k); f64(lon * Math.PI / 180); f64(lat * Math.PI / 180); i32(1); raw(1); raw(4);
+  });
+  const b = Buffer.concat(out);
+  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+}
+
+test('Lowrance .usr waypoints and trails are read', () => {
+  const buf = buildUSR();
+  assert.equal(isUSR(buf), true);
+  const { waypoints, trails } = parseUSR(buf);
+  assert.deepEqual(waypoints.map((w) => w.name), ['L3', 'R4 L2']);
+  assert.ok(Math.abs(waypoints[0].lat + 30.52) < 1e-4 && Math.abs(waypoints[0].lon - 121.49) < 1e-4, `${waypoints[0].lat}, ${waypoints[0].lon}`);
+  assert.equal(trails.length, 1);
+  assert.equal(trails[0].name, 'KDR RACE');
+  assert.equal(trails[0].points.length, 3);
+  assert.ok(Math.abs(trails[0].points[2].lat + 30.5202) < 1e-9);
+  assert.equal(trails[0].points[1].t - trails[0].points[0].t, 1000);
+  assert.equal(isUSR(new TextEncoder().encode('<gpx></gpx>').buffer), false);
 });

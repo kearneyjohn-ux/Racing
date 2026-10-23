@@ -886,14 +886,65 @@ export function parseCornerCall(name) {
   return null;
 }
 
-// Match hand-logged calls ({lat, lon, dir, grade, name}) to the app's corners along the course.
-export function compareWithCalls(analysis, calls, { maxOffset = 80, slack = 50 } = {}) {
+// All the corners in one waypoint name, in order: "R2L2" and "R4 L3 R3" are runs of corners that
+// follow on from each other; "L3", "Left 4 tightens", "3R", "R HAIRPIN" are single corners.
+export function parseCornerCalls(name) {
+  const s = String(name ?? '').toLowerCase();
+  const out = [];
+  const re = /(?<![a-z])(left|right|l|r)\s*[-_.]?\s*([1-6](?![0-9])|hairpin|hp(?![a-z]))/g;
+  for (const m of s.matchAll(re)) {
+    const dirWord = m[1];
+    const g = m[2];
+    const hairpin = !/^[1-6]$/.test(g);
+    out.push({ dir: dirWord[0] === 'l' ? 'L' : 'R', grade: hairpin ? 1 : Number(g), hairpin });
+  }
+  if (out.length) {
+    if (out.length === 1 && /hairpin|(?<![a-z])hp(?![a-z])/.test(s)) out[0].hairpin = true;
+    return out;
+  }
+  const single = parseCornerCall(name);
+  return single ? [single] : [];
+}
+
+// Corner calls from waypoints: the first corner named is the call at the waypoint, any more follow on.
+// Waypoints without a call (route points, numbered marks, our own hazards) are left out.
+export function callsFromWaypoints(waypoints) {
+  const calls = [];
+  for (const w of waypoints) {
+    if (/^hazard-/.test(w.type ?? '')) continue;
+    const [first, ...follow] = parseCornerCalls(w.name);
+    if (first) calls.push({ ...w, ...first, follow: follow.length ? follow : undefined });
+  }
+  return calls;
+}
+
+// Match hand-logged calls ({lat, lon, dir, grade, name, follow?}) to the app's corners along the course.
+// `follow` lists further corners named in the same waypoint; they're matched to the app corners that
+// come next. Calls far from this course (another event in the same file) are ignored.
+export function compareWithCalls(analysis, calls, { maxOffset = 80, slack = 50, lead = 100, dirPenalty = 80, followGap = 250 } = {}) {
   const { corners, closed, ds, samples } = analysis;
   const n = samples.length;
   const along = (a, b) => (closed ? Math.min(mod(b - a, n), mod(a - b, n)) : Math.abs(b - a)) * ds;
+  const ahead = (a, b) => (closed ? mod(b - a, n) : b - a) * ds;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLon = Infinity;
+  let maxLon = -Infinity;
+  for (const q of samples) {
+    minLat = Math.min(minLat, q.lat);
+    maxLat = Math.max(maxLat, q.lat);
+    minLon = Math.min(minLon, q.lon);
+    maxLon = Math.max(maxLon, q.lon);
+  }
+  const pad = 0.01; // about 1 km
   const placed = [];
   const offCourse = [];
+  let elsewhere = 0;
   for (const call of calls) {
+    if (call.lat < minLat - pad || call.lat > maxLat + pad || call.lon < minLon - pad || call.lon > maxLon + pad) {
+      elsewhere++;
+      continue;
+    }
     const loc = locate(analysis, call.lat, call.lon);
     if (loc.offset > maxOffset) offCourse.push(call);
     else placed.push({ ...call, index: loc.index, s: loc.s });
@@ -901,8 +952,11 @@ export function compareWithCalls(analysis, calls, { maxOffset = 80, slack = 50 }
   const pairs = [];
   placed.forEach((call, ci) => {
     corners.forEach((c, k) => {
+      // Pace-note waypoints are often dropped just before the corner, so a corner starting up to
+      // `lead` metres ahead of the call also counts. A corner turning the other way is a worse fit.
       const d = along(call.index, c.apexIdx);
-      if (d <= c.length / 2 + slack) pairs.push({ ci, k, d });
+      const toStart = ahead(call.index, c.startIdx);
+      if (d <= c.length / 2 + slack || (toStart >= 0 && toStart <= lead)) pairs.push({ ci, k, d: d + (c.dir === call.dir ? 0 : dirPenalty) });
     });
   });
   pairs.sort((a, b) => a.d - b.d);
@@ -917,14 +971,35 @@ export function compareWithCalls(analysis, calls, { maxOffset = 80, slack = 50 }
     const corner = corners[p.k];
     matches.push({ call, corner, gradeDiff: Number(corner.grade) - Math.min(5, call.grade), dirMatch: corner.dir === call.dir });
   }
+  // Further corners named in the same waypoint go to the next free app corners, in order.
+  const followMissed = [];
+  for (const primary of [...matches]) {
+    let prev = primary.corner;
+    for (const [j, f] of (primary.call.follow ?? []).entries()) {
+      const call = { ...primary.call, ...f, follow: undefined, name: `${primary.call.name} (${j + 2})` };
+      const k = corners.findIndex((c, idx) => !usedCorner.has(idx) && ahead(prev.endIdx, c.startIdx) >= -ds && ahead(prev.endIdx, c.startIdx) <= followGap && c !== prev);
+      if (k < 0) {
+        followMissed.push(call);
+        continue;
+      }
+      usedCorner.add(k);
+      const corner = corners[k];
+      matches.push({ call, corner, gradeDiff: Number(corner.grade) - Math.min(5, call.grade), dirMatch: corner.dir === call.dir });
+      prev = corner;
+    }
+  }
   matches.sort((a, b) => a.corner.startS - b.corner.startS);
-  const missed = placed.filter((_, ci) => !usedCall.has(ci)).sort((a, b) => a.s - b.s);
+  const missedPrimary = placed.filter((_, ci) => !usedCall.has(ci));
+  const missed = [
+    ...missedPrimary.flatMap((c) => [c, ...(c.follow ?? []).map((f, j) => ({ ...c, ...f, follow: undefined, name: `${c.name} (${j + 2})` }))]),
+    ...followMissed,
+  ].sort((a, b) => a.s - b.s);
   const extra = corners.filter((_, k) => !usedCorner.has(k));
   const graded = matches.filter((m) => m.dirMatch);
   const exact = graded.filter((m) => m.gradeDiff === 0).length;
   const within1 = graded.filter((m) => Math.abs(m.gradeDiff) <= 1).length;
   const meanDiff = graded.length ? graded.reduce((t, m) => t + m.gradeDiff, 0) / graded.length : 0;
-  return { matches, missed, extra, offCourse, exact, within1, graded: graded.length, meanDiff };
+  return { matches, missed, extra, offCourse, elsewhere, exact, within1, graded: graded.length, meanDiff };
 }
 
 // Learn radius limits for grades 1-5 from (radius, grade) pairs: the monotone assignment (bigger

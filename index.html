@@ -101,11 +101,12 @@
       <section class="tab" id="tab-compare" hidden>
         <div class="card">
           <h2>Compare with a truck log</h2>
-          <p class="muted">Load a GPX logged in the truck. If its corners are saved as waypoints named like "L3", "R 2" or "Left 4", those calls are taken as correct: the app shows where it disagrees and recommends changes that make its grades match. A plain track (no waypoints) is compared corner shape by corner shape.</p>
+          <p class="muted">Load a file from the truck: a Lowrance <b>.usr</b> export, or a GPX. If its corners are saved as waypoints named like "L3", "R 2", "Left 4" or "R4L3", those calls are taken as correct: the app shows where it disagrees and recommends changes that make its grades match. A plain track (no waypoints) is compared corner shape by corner shape.</p>
           <div class="join-form">
             <label>App course to check<select id="cmpCourse"></select></label>
-            <label class="btn">Choose truck GPX<input type="file" id="cmpFile" hidden></label>
+            <label class="btn">Choose truck file (.usr or GPX)<input type="file" id="cmpFile" hidden></label>
             <small class="muted" id="cmpFileInfo">No truck file chosen yet.</small>
+            <label id="cmpTrailRow" hidden>Truck trail to show<select id="cmpTrail"></select></label>
             <button type="button" class="btn btn-go" id="cmpRun" disabled>Compare</button>
           </div>
         </div>

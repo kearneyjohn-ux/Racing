@@ -56,7 +56,7 @@ While recording or driving the map follows you. Zoom with pinch or the +/− but
 2. The track is projected to metres, resampled every 1 m and smoothed. The smoothing adapts to how far apart the fixes are, so fast straights logged at 1 Hz become smooth curves while slow hairpins keep their shape.
 3. **Curvature** (1/radius) is measured from the change in heading over an 8 m window. Positive curvature means a left turn.
 4. A **corner** starts when the radius drops below 150 m and ends when it rises above 250 m or the direction flips (so an S-bend is two corners). Same-direction pieces less than 12 m apart are merged, and bends turning less than 15° are ignored.
-5. Bends tighter than any vehicle can turn (under 2.5 m radius: GPS noise), or tighter than 6 m and driven slower than 4 km/h (pulling over, parking, turning round), are not counted as corners.
+5. Bends tighter than any vehicle can turn (under 2.5 m radius: GPS noise), or taken at walking pace (under 4 km/h) and either tighter than 6 m or where the road barely changes direction 100 m either side (the wobble of crawling into and out of a stop), are not counted as corners.
 6. Each corner's **radius** is the mean of its tightest part, and its **angle** is the total heading change.
 7. **Target speed** comes from the cornering limit `v = √(μ × grip% × g × r)`, where μ is the surface grip, g = 9.81 m/s² and r the radius. A 50 m radius on loose gravel at 80% grip gives `√(0.55 × 0.8 × 9.81 × 50) ≈ 14.7 m/s ≈ 53 km/h`, a **3**.
 

@@ -325,4 +325,13 @@ test('corners tighter than a vehicle can turn, or crawled through, are dropped',
   assert.equal(isManoeuvre({ radius: 5, drivenKmh: 12 }), false, 'a real tight hairpin taken slowly');
   assert.equal(isManoeuvre({ radius: 8, drivenKmh: 2 }), false, 'wider than a manoeuvre');
   assert.equal(isManoeuvre({ radius: 4, drivenKmh: null }), false, 'tight but possible, no speed data');
+  // KDR2026 at 70.39 km: a "45° right" crawled at 0.7 km/h where the road only turns 13°.
+  assert.equal(isManoeuvre({ radius: 11.8, angle: 45, netTurn: 13, drivenKmh: 0.7 }), true, 'wobble at a stop');
+  assert.equal(isManoeuvre({ radius: 12, angle: 90, netTurn: 85, drivenKmh: 0.7 }), false, 'a real bend you happened to stop in');
+  assert.equal(isManoeuvre({ radius: 12, angle: 45, netTurn: 13, drivenKmh: 30 }), false, 'only applies at walking pace');
+});
+
+test('net turn matches a real corner and is small for a straight', () => {
+  const a = analyzeCourse(track([{ straight: 200 }, { radius: 30, angle: 90, dir: 'L' }, { straight: 200 }]));
+  near(a.corners[0].netTurn, 90, 8, 'net turn of a 90° corner');
 });

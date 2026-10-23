@@ -455,6 +455,7 @@ export function analyzeCourse(rawPoints, options = {}) {
         hairpin,
         drivenKmh: drivenList.length ? Math.min(...drivenList) : null,
         guessed: samples[c.apexIdx].filled,
+        netTurn: netTurn(sx, sy, c.startIdx, c.endIdx, closed, Math.round(100 / ds)),
         long: c.angle >= 110 && !hairpin,
         into: false,
         note: '',
@@ -495,7 +496,23 @@ const MANOEUVRE_KMH = 4;
 
 export function isManoeuvre(c) {
   if (c.radius < NOISE_RADIUS) return true;
-  return c.radius < MANOEUVRE_RADIUS && c.drivenKmh !== null && c.drivenKmh < MANOEUVRE_KMH;
+  if (c.drivenKmh === null || c.drivenKmh >= MANOEUVRE_KMH) return false;
+  if (c.radius < MANOEUVRE_RADIUS) return true;
+  // Crawling into and out of a stop wobbles the track; if the road barely changes direction
+  // when you look 100 m either side, it's that wobble rather than a bend.
+  return Number.isFinite(c.netTurn) && c.netTurn < c.angle * 0.5;
+}
+
+// Change of direction (degrees) between the 100 m leading into a corner and the 100 m after it.
+function netTurn(x, y, startIdx, endIdx, closed, span) {
+  const n = x.length;
+  const at = (i) => (closed ? mod(i, n) : Math.min(n - 1, Math.max(0, i)));
+  const a = at(startIdx - span);
+  const b = at(endIdx + span);
+  const h1 = Math.atan2(y[startIdx] - y[a], x[startIdx] - x[a]);
+  const h2 = Math.atan2(y[b] - y[endIdx], x[b] - x[endIdx]);
+  if (a === startIdx || b === endIdx) return NaN;
+  return Math.abs(wrapAngle(h2 - h1)) * R2D;
 }
 
 function drivenSpeeds(t, v, ds, closed) {

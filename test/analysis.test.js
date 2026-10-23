@@ -15,7 +15,7 @@ import {
   hazardLevelFromSpeech,
   joinTracks,
 } from '../js/analysis.js';
-import { buildPath, toLatLon, simulateGPS, speedProfile } from '../tools/track-gen.js';
+import { buildPath, toLatLon, simulateGPS, speedProfile, rng } from '../tools/track-gen.js';
 
 const track = (parts, opts) => toLatLon(buildPath(parts, opts));
 const near = (actual, expected, tol, msg) =>
@@ -243,4 +243,30 @@ test('joining trims an overlap instead of filling', () => {
   assert.equal(joined.gap, 0);
   assert.ok(!joined.points.some((p) => p.filled));
   assert.equal(analyzeCourse(joined.points).corners.length, 4);
+});
+
+// A rest stop in the middle of a straight: the GPS keeps wandering a few metres while parked.
+function trackWithStop({ withSpeed }) {
+  const rand = rng(5);
+  const pts = [];
+  let t = Date.UTC(2026, 9, 1, 9);
+  let x = 0;
+  for (let i = 0; i < 25; i++, t += 1000, x += 15) pts.push({ x, y: 0, t, speed: 15 });
+  let jx = 0;
+  let jy = 0;
+  for (let i = 0; i < 120; i++, t += 1000) {
+    jx = 0.85 * jx + 1.2 * rand.gauss();
+    jy = 0.85 * jy + 1.2 * rand.gauss();
+    pts.push({ x: x + jx, y: jy, t, speed: Math.abs(0.2 * rand.gauss()) });
+  }
+  for (let i = 0; i < 25; i++, t += 1000) pts.push({ x: (x += 15), y: 0, t, speed: 15 });
+  return toLatLon(pts).map(({ lat, lon, t: time, speed }) => ({ lat, lon, t: time, ...(withSpeed ? { speed } : {}) }));
+}
+
+test('a rest stop on a straight does not become a corner', () => {
+  for (const withSpeed of [true, false]) {
+    const a = analyzeCourse(trackWithStop({ withSpeed }));
+    assert.equal(a.corners.length, 0, `${withSpeed ? 'with' : 'without'} GPS speed: ${a.corners.map((c) => `${Math.round(c.angle)}° r${c.radius.toFixed(1)}`).join(', ')}`);
+    assert.ok(Math.abs(a.length - 750) < 30, `length ${a.length}`);
+  }
 });

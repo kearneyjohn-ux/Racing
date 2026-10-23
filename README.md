@@ -52,7 +52,7 @@ While recording or driving the map follows you. Zoom with pinch or the +/− but
 
 ## How the rating works
 
-1. GPS fixes with poor reported accuracy, stationary jitter and impossible jumps are dropped.
+1. GPS fixes with poor reported accuracy and impossible jumps are dropped. **Stops are collapsed to a single point**: while parked, GPS wanders a few metres, which would otherwise look like a tangle of tiny corners. A fix counts as stopped when the GPS reports almost no speed, or the vehicle moved less than 8 m in 10 seconds.
 2. The track is projected to metres, resampled every 1 m and smoothed. The smoothing adapts to how far apart the fixes are, so fast straights logged at 1 Hz become smooth curves while slow hairpins keep their shape.
 3. **Curvature** (1/radius) is measured from the change in heading over an 8 m window. Positive curvature means a left turn.
 4. A **corner** starts when the radius drops below 150 m and ends when it rises above 250 m or the direction flips (so an S-bend is two corners). Same-direction pieces less than 12 m apart are merged, and bends turning less than 15° are ignored.

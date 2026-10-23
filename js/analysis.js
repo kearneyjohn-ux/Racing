@@ -104,6 +104,40 @@ export function cleanPoints(points, opts = DEFAULTS) {
     }
     out.push(p);
   }
+  return collapseStops(out);
+}
+
+// While the vehicle is parked the GPS keeps wandering a few metres, which looks like a tight
+// tangle of turns. Treat as stopped any fix where the GPS reports (almost) no speed, or where the
+// vehicle moved less than STOP_RADIUS over STOP_SECONDS, and keep one fix per stop.
+const STOP_SECONDS = 10;
+const STOP_RADIUS = 8; // metres
+const STOP_SPEED = 0.5; // m/s reported by the GPS
+
+export function collapseStops(pts) {
+  const n = pts.length;
+  const stopped = new Uint8Array(n);
+  for (let i = 0; i < n; i++) if (Number.isFinite(pts[i].speed) && pts[i].speed < STOP_SPEED) stopped[i] = 1;
+  if (pts.every((p) => Number.isFinite(p.t))) {
+    let j = 0;
+    for (let i = 0; i < n; i++) {
+      j = Math.max(j, i);
+      while (j < n - 1 && Math.abs(pts[j].t - pts[i].t) < STOP_SECONDS * 1000) j++;
+      if (Math.abs(pts[j].t - pts[i].t) >= STOP_SECONDS * 1000 && haversine(pts[i], pts[j]) < STOP_RADIUS) {
+        for (let k = i; k <= j; k++) stopped[k] = 1;
+      }
+    }
+  } else {
+    // No times (some imported files): just ignore fixes that barely moved from the last one kept.
+    const kept = [];
+    for (const p of pts) if (!kept.length || haversine(kept.at(-1), p) >= 2) kept.push(p);
+    return kept;
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    if (stopped[i] && i > 0 && stopped[i - 1]) continue; // keep only where each stop begins
+    out.push(pts[i]);
+  }
   return out;
 }
 

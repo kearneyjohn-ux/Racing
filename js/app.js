@@ -644,8 +644,32 @@ document.querySelectorAll('[data-export]').forEach((btn) =>
     if (kind === 'geojson') download(`${base}.geojson`, toGeoJSON(state.course.name, a, state.runs, hz), 'application/geo+json');
     if (kind === 'csv') download(`${base}-pace-notes.csv`, toPaceNotesCSV(a, (k) => Math.round(toUnit(k)), hz), 'text/csv');
     if (kind === 'gpx') exportGPX(state.course);
+    if (kind === 'beamng') exportBeamNG(btn);
   }),
 );
+
+// A BeamNG.drive mod zip: the course as a level, with pace notes shown while you drive.
+async function exportBeamNG(btn) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  try {
+    const { buildBeamNGLevel } = await import('./beamng.js');
+    const s = state.settings;
+    const res = await buildBeamNGLevel(state.course.name, state.analysis, {
+      hazards: state.hazards,
+      leadMeters: Number(s.callDistance) || 100,
+      leadSeconds: s.callMode === 'time' ? Number(s.leadSeconds) || 5 : 0,
+      onProgress: (msg) => (btn.textContent = msg),
+    });
+    await shareOrDownload(res.filename, res.bytes, 'application/zip');
+    toast(`BeamNG level ready (${(res.bytes.length / 1e6).toFixed(1)} MB). Put the zip in your BeamNG mods folder.`, 6000);
+  } catch (err) {
+    toast(`Couldn't build the BeamNG level: ${err.message}`, 6000);
+  }
+  btn.textContent = label;
+  btn.disabled = false;
+}
 
 // ---------------------------------------------------------------------------
 // Compare with a truck log: corner calls saved as waypoints are taken as correct, the app's
@@ -1988,7 +2012,7 @@ $('dcVoice').addEventListener('click', () => {
 // Start-up
 
 // Shown in Settings so you can check a phone has picked up the latest update.
-const APP_VERSION = '23';
+const APP_VERSION = '24';
 $('appVersion').textContent = APP_VERSION;
 
 initSettings();

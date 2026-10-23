@@ -53,6 +53,20 @@ The **Compare** tab checks the app's corner grades against a file logged in the 
 
 Nothing changes until you tap **Apply**; the comparison then re-runs with the new setting.
 
+## Drive it in BeamNG.drive
+
+**Corners → Export → BeamNG level** builds a BeamNG.drive mod (.zip) from the course, so you can practise it in the sim:
+
+- **The course is a dirt road** on gently rolling red desert. The track surface drives as dirt and off the track is sand.
+- **Start line and spawn:** you spawn just behind the start line, facing the right way. A point-to-point stage also gets a finish line.
+- **Map:** the in-game map shows the course coloured by corner grade, like the app.
+- **Pace notes** appear on screen as you drive, e.g. "100 m  Left 3 tightens, into Right 4". They use your *Call corners* setting (distance, or time before the corner) and include hazards.
+- **Timing:** a loop shows each lap time; a stage shows "Go" at the start line and your time at the finish.
+
+To install: copy the zip to `Documents/BeamNG.drive/mods` (newer versions: `AppData/Local/BeamNG.drive/<version>/mods`), start the game, and pick the course from the map list. The terrain grid is sized to the course: up to about 32 km across (KDR2026 is 29 km). Phone recordings don't carry height, so the ground is gently rolling rather than the real terrain.
+
+The level files follow BeamNG's current format as written by [MapNG](https://github.com/nikkiluzader/mapng) (MIT License, Copyright (c) 2026 Nikki Luzader).
+
 ## Settings
 
 - **Surface** sets the grip used for target speeds: tarmac 0.85, hard-packed dirt 0.65, loose gravel 0.55, dry grass 0.45, sand 0.4, wet grass/mud 0.3, snow 0.22.
@@ -101,7 +115,8 @@ npm run demo    # regenerate samples/demo-course.gpx
 ```
 
 - `js/analysis.js`: smoothing, curvature, corner detection, rating, live positioning (no DOM, runs in Node)
-- `js/formats.js`: GPX / KML / GeoJSON / CSV / NMEA import and export
+- `js/formats.js`: GPX / KML / GeoJSON / CSV / NMEA / Lowrance .usr import and export
+- `js/beamng.js`, `js/beamng-lua.js`: BeamNG.drive level and in-game pace notes; `js/zip.js`: PNG and ZIP writing
 - `js/app.js`: map (Leaflet), recording, corner list, settings, drive mode
 - `sw.js`: offline cache for the app and any map tiles you've viewed
 - `tools/`: synthetic track generator used by the tests and the demo course

@@ -15,6 +15,7 @@ import {
   hazardLevelFromSpeech,
   joinTracks,
   isManoeuvre,
+  dropStrayEnds,
 } from '../js/analysis.js';
 import { buildPath, toLatLon, simulateGPS, speedProfile, rng } from '../tools/track-gen.js';
 
@@ -334,4 +335,28 @@ test('corners tighter than a vehicle can turn, or crawled through, are dropped',
 test('net turn matches a real corner and is small for a straight', () => {
   const a = analyzeCourse(track([{ straight: 200 }, { radius: 30, angle: 90, dir: 'L' }, { straight: 200 }]));
   near(a.corners[0].netTurn, 90, 8, 'net turn of a 90° corner');
+});
+
+// KDR Prologue: the recording began with a 5-minute-old fix and a glitch 830 m away, which moved
+// the "start" and made the 20 km loop look like a 1.7 km lap.
+test('stray fixes at the start of a recording are ignored', () => {
+  const lap = toLatLon(buildPath(rectangle, { step: 2 })).map((p, i) => ({ lat: p.lat, lon: p.lon, t: Date.UTC(2026, 9, 1, 10) + i * 1000 }));
+  const t0 = lap[0].t;
+  const stale = { lat: lap[0].lat + 0.00005, lon: lap[0].lon, t: t0 - 300000 }; // 5 min earlier, ~5 m off
+  const glitch = { lat: lap[0].lat - 0.0065, lon: lap[0].lon + 0.0049, t: t0 - 9000 }; // ~830 m away
+  const waiting = Array.from({ length: 8 }, (_, i) => ({ lat: lap[0].lat, lon: lap[0].lon, t: t0 - 8000 + i * 1000 }));
+  const pts = [stale, glitch, ...waiting, ...lap.slice(1)];
+  assert.equal(dropStrayEnds(pts)[0], waiting[0], 'starts from the first good fix');
+  const a = analyzeCourse(pts);
+  assert.equal(a.closed, true);
+  assert.equal(a.corners.length, 4);
+  near(a.length, 900 + 4 * (20 * Math.PI) / 2, 40, 'full lap length');
+});
+
+test('a course that passes its own start and carries on is not cut short', () => {
+  // Round the rectangle back through the start, then turn off and drive somewhere else.
+  const pts = track([...rectangle, { radius: 20, angle: 90, dir: 'R' }, { straight: 800 }]);
+  const a = analyzeCourse(pts);
+  assert.equal(a.trimmed, false);
+  assert.ok(a.length > 1800, `length ${a.length}`);
 });

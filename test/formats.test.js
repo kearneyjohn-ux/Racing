@@ -102,3 +102,16 @@ test('GPX short waypoint names', () => {
   // Full names remain the default.
   assert.match(toGPX('Full', pts, { corners: a.corners }), /<name>Right 2 long tightens<\/name>/);
 });
+
+test('GPX keeps GPS accuracy and speed so another phone analyses the course the same way', () => {
+  const pts = [
+    { lat: 52.1, lon: -7.1, t: Date.UTC(2026, 9, 1), acc: 48.5, speed: 0 },
+    { lat: 52.1001, lon: -7.1001, t: Date.UTC(2026, 9, 1) + 1000, acc: 4.2, speed: 13.37 },
+    { lat: 52.1002, lon: -7.1002, t: Date.UTC(2026, 9, 1) + 2000 },
+  ];
+  const gpx = toGPX('Acc', pts);
+  assert.match(gpx, /xmlns:rcp="/);
+  const back = parseTrackFile(gpx, 'a.gpx');
+  assert.deepEqual(back.map((p) => p.acc), [48.5, 4.2, NaN]);
+  assert.deepEqual(back.map((p) => p.speed), [0, 13.37, NaN]);
+});

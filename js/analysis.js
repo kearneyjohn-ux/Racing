@@ -104,7 +104,31 @@ export function cleanPoints(points, opts = DEFAULTS) {
     }
     out.push(p);
   }
-  return collapseStops(out);
+  return collapseStops(dropStrayEnds(out));
+}
+
+// A phone often reports a stale or wild position when recording starts (e.g. where it was parked
+// minutes earlier, or a glitch hundreds of metres away). Drop a handful of fixes at either end
+// that jump more than STRAY_JUMP to the next one, after a long pause or faster than a car can go.
+const STRAY_JUMP = 100; // metres
+const STRAY_GAP_S = 60;
+const STRAY_SPEED = 50; // m/s (180 km/h)
+const STRAY_MAX_FIXES = 10;
+
+export function dropStrayEnds(pts) {
+  const jumpAfter = (i) => {
+    const a = pts[i];
+    const b = pts[i + 1];
+    if (!b || !Number.isFinite(a.t) || !Number.isFinite(b.t)) return false;
+    const d = haversine(a, b);
+    const dt = Math.abs(b.t - a.t) / 1000;
+    return d > STRAY_JUMP && (dt > STRAY_GAP_S || d / Math.max(dt, 0.1) > STRAY_SPEED);
+  };
+  let from = 0;
+  let to = pts.length;
+  for (let i = 0; i < Math.min(STRAY_MAX_FIXES, pts.length - 1); i++) if (jumpAfter(i)) from = i + 1;
+  for (let i = pts.length - 2; i >= Math.max(from, pts.length - 1 - STRAY_MAX_FIXES); i--) if (jumpAfter(i)) to = i + 1;
+  return to - from >= 3 ? pts.slice(from, to) : pts;
 }
 
 // While the vehicle is parked the GPS keeps wandering a few metres, which looks like a tight
@@ -180,10 +204,32 @@ function findLapEnd(xy) {
         best = i;
       }
     } else if (best >= 0 && d0 >= 25) {
-      return best;
+      // Passing back by the start only ends a lap if the course then goes round again.
+      if (retracesStart(xy, best)) return best;
+      best = -1;
+      bestD = Infinity;
     }
   }
   return best;
+}
+
+// True if the 300 m after `from` follows the first 600 m of the course (a second lap), or if the
+// recording ends within 150 m anyway.
+function retracesStart(xy, from) {
+  const head = [];
+  for (let i = 0, cum = 0; i < xy.length && cum < 600; i++) {
+    if (i) cum += dist(xy[i - 1], xy[i]);
+    head.push(xy[i]);
+  }
+  const offsets = [];
+  let cum = 0;
+  for (let i = from + 1; i < xy.length && cum < 300; i++) {
+    cum += dist(xy[i - 1], xy[i]);
+    offsets.push(Math.min(...head.map((h) => dist(h, xy[i]))));
+  }
+  if (cum < 150) return true;
+  offsets.sort((p, q) => p - q);
+  return offsets[Math.floor(offsets.length / 2)] < 25;
 }
 
 function resample(xy, channels, step, closed) {

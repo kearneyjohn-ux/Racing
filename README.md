@@ -13,7 +13,7 @@ It runs in the phone's browser, so there's nothing to install. You can add it to
    - Stopping takes a **1-second press-and-hold**, so a bump or a stray tap can't end it early.
    - The track is saved every few seconds. If the browser is closed mid-lap, it offers to recover the recording next time you open the app.
    - Keep the app open with the screen on (it keeps the screen awake for you). Phones pause GPS for web apps in the background. If that happens you're warned that part of the track was guessed.
-   - If you drive more than one lap, only the first full lap is used.
+   - If you drive more than one lap, only the first full lap is used (a lap only counts as finished if the course then goes round again, so a course that passes its own start isn't cut short).
    - **If the app stopped mid-lap** and you started again, go to *Course → Join two recordings*, pick part 1 and part 2, and tap **Join**. Any gap between them is filled with a smooth curve (dotted on the map), and corners inside the gap are marked as guesses. If the two parts overlap, the overlap is trimmed instead. The originals are kept.
    - Or **import a file** from a GPS logger, lap timer, sports watch or Strava/Garmin export: GPX, KML, GeoJSON, CSV (with `lat`/`lon` columns) or NMEA.
    - Or tap **Load demo course** to try it at home.
@@ -52,7 +52,7 @@ While recording or driving the map follows you. Zoom with pinch or the +/− but
 
 ## How the rating works
 
-1. GPS fixes with poor reported accuracy and impossible jumps are dropped. **Stops are collapsed to a single point**: while parked, GPS wanders a few metres, which would otherwise look like a tangle of tiny corners. A fix counts as stopped when the GPS reports almost no speed, or the vehicle moved less than 8 m in 10 seconds.
+1. GPS fixes with poor reported accuracy and impossible jumps are dropped, as are stray fixes at either end of a recording (a stale or glitched position that jumps over 100 m to the rest). **Stops are collapsed to a single point**: while parked, GPS wanders a few metres, which would otherwise look like a tangle of tiny corners. A fix counts as stopped when the GPS reports almost no speed, or the vehicle moved less than 8 m in 10 seconds.
 2. The track is projected to metres, resampled every 1 m and smoothed. The smoothing adapts to how far apart the fixes are, so fast straights logged at 1 Hz become smooth curves while slow hairpins keep their shape.
 3. **Curvature** (1/radius) is measured from the change in heading over an 8 m window. Positive curvature means a left turn.
 4. A **corner** starts when the radius drops below 150 m and ends when it rises above 250 m or the direction flips (so an S-bend is two corners). Same-direction pieces less than 12 m apart are merged, and bends turning less than 15° are ignored.

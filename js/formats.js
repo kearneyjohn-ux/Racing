@@ -39,6 +39,7 @@ export function parseGPX(text) {
         ele: num(child(body, 'ele')),
         t: time ? Date.parse(time) : NaN,
         speed: num(child(body, 'speed')),
+        acc: num(child(body, 'acc')),
       });
     }
     return out;
@@ -163,11 +164,14 @@ export function toGPX(name, points, { corners = [], hazards = [], fmtSpeed = (k)
     .map((p) => {
       const ele = Number.isFinite(p.ele) ? `<ele>${p.ele.toFixed(1)}</ele>` : '';
       const time = Number.isFinite(p.t) ? `<time>${new Date(p.t).toISOString()}</time>` : '';
-      return `      <trkpt lat="${f7(p.lat)}" lon="${f7(p.lon)}">${ele}${time}</trkpt>`;
+      // Accuracy and speed ride along as extensions (ignored by other apps) so the course
+      // analyses the same after it's imported on another phone.
+      const ext = [Number.isFinite(p.acc) && `<rcp:acc>${p.acc.toFixed(1)}</rcp:acc>`, Number.isFinite(p.speed) && `<rcp:speed>${p.speed.toFixed(2)}</rcp:speed>`].filter(Boolean).join('');
+      return `      <trkpt lat="${f7(p.lat)}" lon="${f7(p.lon)}">${ele}${time}${ext ? `<extensions>${ext}</extensions>` : ''}</trkpt>`;
     })
     .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Race Course Plotter" xmlns="http://www.topografix.com/GPX/1/1">
+<gpx version="1.1" creator="Race Course Plotter" xmlns="http://www.topografix.com/GPX/1/1" xmlns:rcp="https://kearneyjohn-ux.github.io/Racing/gpx/1">
   <metadata><name>${esc(name)}</name><time>${new Date().toISOString()}</time></metadata>
 ${waypoints.join('\n')}${waypoints.length ? '\n' : ''}  <trk><name>${esc(name)}</name>
     <trkseg>

@@ -266,7 +266,9 @@ function trackWithStop({ withSpeed }) {
 
 test('a rest stop on a straight does not become a corner', () => {
   for (const withSpeed of [true, false]) {
-    const a = analyzeCourse(trackWithStop({ withSpeed }));
+    // A few fixes without times (like a gap filled in by joining) must not disable stop detection.
+    const pts = trackWithStop({ withSpeed }).map((p, i) => (i > 160 ? { ...p, t: NaN } : p));
+    const a = analyzeCourse(pts);
     assert.equal(a.corners.length, 0, `${withSpeed ? 'with' : 'without'} GPS speed: ${a.corners.map((c) => `${Math.round(c.angle)}° r${c.radius.toFixed(1)}`).join(', ')}`);
     assert.ok(Math.abs(a.length - 750) < 30, `length ${a.length}`);
   }

@@ -118,13 +118,20 @@ export function collapseStops(pts) {
   const n = pts.length;
   const stopped = new Uint8Array(n);
   for (let i = 0; i < n; i++) if (Number.isFinite(pts[i].speed) && pts[i].speed < STOP_SPEED) stopped[i] = 1;
-  if (pts.every((p) => Number.isFinite(p.t))) {
-    let j = 0;
-    for (let i = 0; i < n; i++) {
-      j = Math.max(j, i);
-      while (j < n - 1 && Math.abs(pts[j].t - pts[i].t) < STOP_SECONDS * 1000) j++;
-      if (Math.abs(pts[j].t - pts[i].t) >= STOP_SECONDS * 1000 && haversine(pts[i], pts[j]) < STOP_RADIUS) {
-        for (let k = i; k <= j; k++) stopped[k] = 1;
+  // Only fixes with a time take part, so a stretch without times (e.g. a gap filled in when two
+  // recordings were joined) doesn't switch stop detection off for the whole course.
+  const timed = [];
+  for (let i = 0; i < n; i++) if (Number.isFinite(pts[i].t)) timed.push(i);
+  if (timed.length >= 2) {
+    let b = 0;
+    for (let a = 0; a < timed.length; a++) {
+      b = Math.max(b, a);
+      const ta = pts[timed[a]].t;
+      while (b < timed.length - 1 && Math.abs(pts[timed[b]].t - ta) < STOP_SECONDS * 1000) b++;
+      const i = timed[a];
+      const j = timed[b];
+      if (Math.abs(pts[j].t - ta) >= STOP_SECONDS * 1000 && haversine(pts[i], pts[j]) < STOP_RADIUS) {
+        for (let k = a; k <= b; k++) stopped[timed[k]] = 1;
       }
     }
   } else {
